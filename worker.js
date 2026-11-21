@@ -18,8 +18,16 @@ export default {
       });
     }
 
-    if (request.method !== "POST" ||
-        !["/", "/generate", "/api/generate", "/generate-recap", "/api/recap"].includes(url.pathname)) {
+    if (
+      request.method !== "POST" ||
+      ![
+        "/",
+        "/generate",
+        "/api/generate",
+        "/generate-recap",
+        "/api/recap"
+      ].includes(url.pathname)
+    ) {
       return reply({ error: "Not found" }, 404);
     }
 
@@ -28,16 +36,20 @@ export default {
     }
 
     const auth = request.headers.get("Authorization");
+
     if (auth !== "Bearer " + env.APP_TOKEN) {
       return reply({ error: "Unauthorized" }, 401);
     }
 
     let input;
+
     try {
       const body = await request.text();
+
       if (body.length > 80000) {
         return reply({ error: "Text too long" }, 413);
       }
+
       input = JSON.parse(body);
     } catch {
       return reply({ error: "Invalid JSON" }, 400);
@@ -63,7 +75,7 @@ export default {
 
     try {
       const res = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
         {
           method: "POST",
           headers: {
@@ -71,7 +83,11 @@ export default {
             "x-goog-api-key": env.GEMINI_API_KEY
           },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [
+              {
+                parts: [{ text: prompt }]
+              }
+            ],
             generationConfig: {
               temperature: 0.4,
               maxOutputTokens: 8192
@@ -81,6 +97,7 @@ export default {
       );
 
       const data = await res.json();
+
       if (!res.ok) {
         return reply({
           error: "Gemini API failed",
@@ -88,8 +105,12 @@ export default {
         }, 502);
       }
 
-      const script = (data.candidates?.[0]?.content?.parts || [])
-        .map(p => p.text || "").join("").trim();
+      const script = (
+        data.candidates?.[0]?.content?.parts || []
+      )
+        .map(p => p.text || "")
+        .join("")
+        .trim();
 
       if (!script) {
         return reply({ error: "No script generated" }, 502);
@@ -101,8 +122,9 @@ export default {
         text: script,
         result: script
       });
+
     } catch {
       return reply({ error: "AI request failed" }, 502);
     }
   }
-}; 
+};
