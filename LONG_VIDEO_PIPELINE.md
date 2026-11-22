@@ -1,8 +1,8 @@
 # W.H.K Movie Recap long-video pipeline — development design
 
 ## Current status
-- Draft branch has authenticated POST /api/analyze-video for up to 8 still JPEG samples. Visual-only; NOT sufficient for feature films.
-- Draft branch also has POST /api/analyze-long-video accepting an ACTIVE Gemini Files API video file URI. The endpoint sends the VIDEO AND AUDIO file to Gemini for a scene timeline and recap script.
+- Legacy sampled-JPEG `/api/analyze-video` endpoint has been removed from this development branch because still images are insufficient for the requested full-movie recap.
+- Draft branch has POST /api/analyze-long-video accepting an ACTIVE Gemini Files API video file URI. The endpoint sends the VIDEO AND AUDIO file to Gemini for a scene timeline and recap script.
 - The long-video endpoint is **not integrated with Android yet**, has not been validated against live Gemini, and must NOT be described as a finished app feature.
 - Existing production worker is not modified/deployed by this branch.
 
