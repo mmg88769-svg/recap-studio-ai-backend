@@ -78,12 +78,15 @@ export default {
       });
     }
 
+    const analyzeLongVideo = url.pathname === "/api/analyze-long-video";
+    const uploadSession = url.pathname === "/api/upload-session";
+    const videoStatus = url.pathname === "/api/video-status";
     const tts = url.pathname === "/api/tts";
     const translate = url.pathname === "/api/translate";
 
     if (
       request.method !== "POST" ||
-      (!tts && !translate && !scriptPaths.has(url.pathname))
+      (!tts && !translate && !analyzeLongVideo && !uploadSession && !videoStatus && !scriptPaths.has(url.pathname))
     ) {
       return json({error: "Not found"}, 404);
     }
@@ -111,6 +114,130 @@ export default {
       input = JSON.parse(body);
     } catch {
       return json({error: "Invalid JSON"}, 400);
+    }
+
+
+
+
+    // Start Gemini resumable file upload. Never return the Gemini API key to Android.
+    // The temporary upload URL is a capability token; do not log or share it.
+    if (uploadSession) {
+      const size = Number(input?.size_bytes);
+      const mime = input?.mime_type;
+      if (!Number.isSafeInteger(size) || size < 1 || size > 500000000 ||
+          !["video/mp4", "video/quicktime"].includes(mime)) {
+        return json({error: "Beta supports MP4/MOV videos up to 500 MB"}, 400);
+      }
+      try {
+        const start = await fetch(
+          "https://generativelanguage.googleapis.com/upload/v1beta/files", {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": env.GEMINI_API_KEY,
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": String(size),
+            "X-Goog-Upload-Header-Content-Type": mime,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({file: {display_name: "whk-recap-video"}})
+        });
+        if (!start.ok) return json({
+          error: "Upload session creation failed", status: start.status
+        }, 502);
+        const uploadUrl = start.headers.get("x-goog-upload-url");
+        if (!uploadUrl ||
+            !uploadUrl.startsWith("https://generativelanguage.googleapis.com/")) {
+          return json({error: "Gemini did not return an upload session"}, 502);
+        }
+        return json({
+          upload_url: uploadUrl,
+          size_bytes: size,
+          mime_type: mime,
+          upload_headers: {
+            "X-Goog-Upload-Offset": "0",
+            "X-Goog-Upload-Command": "upload, finalize",
+            "Content-Type": mime
+          },
+          note: "Upload video bytes directly to upload_url. Keep the URL private. The response contains file.name and file.uri."
+        });
+      } catch {
+        return json({error: "Upload session request failed"}, 502);
+      }
+    }
+
+    // Poll a previously uploaded Gemini file until ACTIVE, or return FAILED.
+    if (videoStatus) {
+      const name = input?.file_name;
+      if (typeof name !== "string" ||
+          !/^files\/[A-Za-z0-9_-]+$/.test(name)) {
+        return json({error: "Invalid Gemini file name"}, 400);
+      }
+      try {
+        const response = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/" + name, {
+          headers: {"x-goog-api-key": env.GEMINI_API_KEY}
+        });
+        if (!response.ok) return json({
+          error: "File status unavailable", status: response.status
+        }, 502);
+        const data = await response.json();
+        return json({
+          state: data.state || "UNKNOWN",
+          file_uri: data.state === "ACTIVE" ? data.uri : null,
+          mime_type: data.mimeType || null,
+          size_bytes: data.sizeBytes || null,
+          error: data.error?.message || null
+        });
+      } catch {
+        return json({error: "File status check failed"}, 502);
+      }
+    }
+
+    // Stage 2: native video + audio understanding.
+    // Requires a VIDEO file previously uploaded via Gemini Files API and ACTIVE.
+    // Do not send video bytes/base64 to this JSON route.
+    if (analyzeLongVideo) {
+      const fileUri = typeof input?.file_uri === "string" ? input.file_uri : "";
+      const mimeType = input?.mime_type === "video/quicktime"
+        ? "video/quicktime" : "video/mp4";
+      const language = languageNames[input?.language] ? input.language : "my";
+      const match = /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/files\/[A-Za-z0-9_-]+$/.test(fileUri);
+      if (!match) {
+        return json({error: "Expected an ACTIVE Gemini Files API video file_uri"}, 400);
+      }
+      const prompt =
+        "Analyze the supplied video with its AUDIO and VISUAL streams. " +
+        "Follow the complete chronology. Make a timestamped list of key scenes " +
+        "and spoken facts, then write a movie recap script in " + languageNames[language] + ". " +
+        "Do not invent off-screen events, speakers or dialogue. State uncertainty " +
+        "for unobserved story details. Return clearly labeled sections: " +
+        "SCENE TIMELINE and RECAP SCRIPT. When the input exceeds the model's " +
+        "context or video duration limit, return an explicit limitation rather than " +
+        "pretending to cover the entire film.";
+      try {
+        const result = await gemini(env, textModel, {
+          contents: [{role: "user", parts: [
+            {fileData: {mimeType, fileUri}},
+            {text: prompt}
+          ]}],
+          generationConfig: {temperature: 0.2, maxOutputTokens: 8192}
+        });
+        if (result.error) return json({
+          error: "Long video analysis failed",
+          detail: result.error,
+          status: result.status
+        }, 502);
+        const script = outputText(result.data);
+        return script ? json({
+          script,
+          language,
+          source: "gemini_video_audio",
+          limitation: "Accuracy and full-movie coverage depend on file, model and context limits"
+        }) : json({error: "No video analysis generated"}, 502);
+      } catch {
+        return json({error: "Long video request failed"}, 502);
+      }
     }
 
     if (translate) {
