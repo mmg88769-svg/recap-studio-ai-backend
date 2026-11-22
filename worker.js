@@ -79,12 +79,13 @@ export default {
     }
 
     const analyzeVideo = url.pathname === "/api/analyze-video";
+    const analyzeLongVideo = url.pathname === "/api/analyze-long-video";
     const tts = url.pathname === "/api/tts";
     const translate = url.pathname === "/api/translate";
 
     if (
       request.method !== "POST" ||
-      (!tts && !translate && !analyzeVideo && !scriptPaths.has(url.pathname))
+      (!tts && !translate && !analyzeVideo && !analyzeLongVideo && !scriptPaths.has(url.pathname))
     ) {
       return json({error: "Not found"}, 404);
     }
@@ -114,6 +115,53 @@ export default {
       return json({error: "Invalid JSON"}, 400);
     }
 
+
+
+    // Stage 2: native video + audio understanding.
+    // Requires a VIDEO file previously uploaded via Gemini Files API and ACTIVE.
+    // Do not send video bytes/base64 to this JSON route.
+    if (analyzeLongVideo) {
+      const fileUri = typeof input?.file_uri === "string" ? input.file_uri : "";
+      const mimeType = input?.mime_type === "video/quicktime"
+        ? "video/quicktime" : "video/mp4";
+      const language = languageNames[input?.language] ? input.language : "my";
+      const match = /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/files\/[A-Za-z0-9_-]+$/.test(fileUri);
+      if (!match) {
+        return json({error: "Expected an ACTIVE Gemini Files API video file_uri"}, 400);
+      }
+      const prompt =
+        "Analyze the supplied video with its AUDIO and VISUAL streams. " +
+        "Follow the complete chronology. Make a timestamped list of key scenes " +
+        "and spoken facts, then write a movie recap script in " + languageNames[language] + ". " +
+        "Do not invent off-screen events, speakers or dialogue. State uncertainty " +
+        "for unobserved story details. Return clearly labeled sections: " +
+        "SCENE TIMELINE and RECAP SCRIPT. When the input exceeds the model's " +
+        "context or video duration limit, return an explicit limitation rather than " +
+        "pretending to cover the entire film.";
+      try {
+        const result = await gemini(env, textModel, {
+          contents: [{role: "user", parts: [
+            {fileData: {mimeType, fileUri}},
+            {text: prompt}
+          ]}],
+          generationConfig: {temperature: 0.2, maxOutputTokens: 8192}
+        });
+        if (result.error) return json({
+          error: "Long video analysis failed",
+          detail: result.error,
+          status: result.status
+        }, 502);
+        const script = outputText(result.data);
+        return script ? json({
+          script,
+          language,
+          source: "gemini_video_audio",
+          limitation: "Accuracy and full-movie coverage depend on file, model and context limits"
+        }) : json({error: "No video analysis generated"}, 502);
+      } catch {
+        return json({error: "Long video request failed"}, 502);
+      }
+    }
 
     // Beta: analyze chronological JPEG stills sampled locally by the Android app.
     // This cannot hear dialogue or verify the complete plot of a feature film.
