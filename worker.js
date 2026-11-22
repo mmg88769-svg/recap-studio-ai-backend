@@ -78,12 +78,13 @@ export default {
       });
     }
 
+    const analyzeVideo = url.pathname === "/api/analyze-video";
     const tts = url.pathname === "/api/tts";
     const translate = url.pathname === "/api/translate";
 
     if (
       request.method !== "POST" ||
-      (!tts && !translate && !scriptPaths.has(url.pathname))
+      (!tts && !translate && !analyzeVideo && !scriptPaths.has(url.pathname))
     ) {
       return json({error: "Not found"}, 404);
     }
@@ -104,13 +105,71 @@ export default {
     try {
       const body = await request.text();
 
-      if (body.length > 80000) {
+      if (body.length > (analyzeVideo ? 1600000 : 80000)) {
         return json({error: "Request too large"}, 413);
       }
 
       input = JSON.parse(body);
     } catch {
       return json({error: "Invalid JSON"}, 400);
+    }
+
+
+    // Beta: analyze chronological JPEG stills sampled locally by the Android app.
+    // This cannot hear dialogue or verify the complete plot of a feature film.
+    if (analyzeVideo) {
+      const frames = Array.isArray(input?.frames) ? input.frames : [];
+      const language = languageNames[input?.language] ? input.language : "my";
+      const jpegBase64 = /^[A-Za-z0-9+/]+={0,2}$/;
+      if (frames.length < 1 || frames.length > 8 ||
+          frames.some(f => typeof f !== "string" ||
+            f.length < 100 || f.length > 220000 ||
+            f.length % 4 !== 0 || !jpegBase64.test(f))) {
+        return json({error: "Provide 1 to 8 JPEG frames under 165 KB each"}, 400);
+      }
+
+      const duration = Number(input?.duration_seconds);
+      const durationLabel = Number.isFinite(duration) &&
+        duration > 0 && duration < 14400
+        ? duration.toFixed(1) + " seconds" : "unknown duration";
+
+      const prompt =
+        "You are viewing up to eight STILL FRAMES sampled in chronological order " +
+        "from a user-provided video (" + durationLabel + "). " +
+        "Describe only characters, locations and actions actually visible. " +
+        "Never invent identities, dialogue, motivations, events between frames, " +
+        "or a film ending. Write a concise movie recap draft in " +
+        languageNames[language] + ". " +
+        "If the frames are insufficient to establish the plot, explicitly " +
+        "state that the story is incomplete. Output the recap only.";
+
+      try {
+        const parts = [{text: prompt}, ...frames.map(data => ({
+          inlineData: {mimeType: "image/jpeg", data}
+        }))];
+        const result = await gemini(env, textModel, {
+          contents: [{role: "user", parts}],
+          generationConfig: {temperature: 0.2, maxOutputTokens: 2048}
+        });
+
+        if (result.error) {
+          return json({
+            error: "Video analysis failed",
+            detail: result.error
+          }, 502);
+        }
+        const script = outputText(result.data);
+        return script
+          ? json({
+              script,
+              language,
+              analyzed_frames: frames.length,
+              limitation: "Visual frames only; dialogue and audio not analyzed"
+            })
+          : json({error: "No script generated"}, 502);
+      } catch {
+        return json({error: "Video analysis request failed"}, 502);
+      }
     }
 
     if (translate) {
