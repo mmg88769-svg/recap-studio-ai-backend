@@ -16,3 +16,6 @@ jobs:
 
       - name: Test video audio extraction and MP4 mixing
         run: python3 tests/video_pipeline_smoke.py
+
+      - name: Test audio transcription prototype
+        run: node --test tests/transcribe-audio-v028.test.mjs
