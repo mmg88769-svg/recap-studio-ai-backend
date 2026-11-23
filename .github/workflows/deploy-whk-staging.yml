@@ -18,8 +18,13 @@ jobs:
       - name: Checkout reviewed AI feature branch
         uses: actions/checkout@v4
         with:
-          ref: feature/whk-video-analysis-v010
+          ref: feature/whk-video-analysis-v07
           persist-credentials: false
+
+      - name: Verify selected staging branch
+        run: |
+          test "$(git branch --show-current)" = "feature/whk-video-analysis-v07" || { echo "::error::Unexpected checkout branch"; exit 1; }
+          grep -q 'Recap Studio AI v0.7' worker.js || { echo "::error::Expected staging worker v0.7 not found"; exit 1; }
 
       - name: Verify Cloudflare deployment credentials exist
         env:
