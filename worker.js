@@ -224,8 +224,8 @@ export default {
         if (response.status===429)
           return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60},429);
         if (!response.ok)
-          return json({error:"Gemini TTS failed",provider_status:response.status,
-            detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
+          return json({error:"Gemini TTS failed (HTTP "+response.status+"): "+(data?.error?.message?.slice(0,250)||"Provider error"),
+            provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
 
         // The documented Interactions REST response exposes output_audio.data.
         // Keep steps parsing as a compatibility fallback for earlier preview payloads.
