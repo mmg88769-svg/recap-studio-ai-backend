@@ -35,7 +35,7 @@ const styles = {
   dramatic: "dramatic, suspenseful movie narration, avoiding exaggerated acting"
 };
 
-const textModel = "gemini-3-flash-preview";
+const textModel = "gemini-3.8-flash";
 const voiceModel = "gemini-3.8-flash-tts";
 
 async function gemini(env, model, payload) {
