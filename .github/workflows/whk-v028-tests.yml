@@ -19,3 +19,6 @@ jobs:
 
       - name: Test audio transcription prototype
         run: node --test tests/transcribe-audio-v028.test.mjs
+
+      - name: Validate movie timeline transcript merge
+        run: python3 -m unittest discover -s tests -p 'test_merge_transcripts.py'
