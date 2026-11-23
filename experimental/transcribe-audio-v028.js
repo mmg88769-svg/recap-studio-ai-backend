@@ -27,8 +27,8 @@ export default {
   if(!response.ok){
    let provider={};try{provider=await response.json()}catch{}
    const detail=String(provider?.error?.message||"").slice(0,240);
-   return json({error:"AI provider failed",provider_status:response.status,model:MODEL,
-    detail,retryable:response.status>=500},502);
+   return json({error:"AI provider failed (HTTP "+response.status+"): "+(detail||"Provider error"),
+    provider_status:response.status,model:MODEL,detail,retryable:response.status>=500},502);
   }
   let body;try{body=await response.json()}catch{return json({error:"Invalid AI response"},502)}
   const text=(body?.candidates?.[0]?.content?.parts||[]).map(x=>x.text||"").join("").trim();
