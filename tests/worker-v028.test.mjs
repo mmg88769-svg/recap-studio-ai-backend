@@ -88,7 +88,7 @@ test("production worker generates Burmese WAV through Free Tier Gemini TTS",asyn
   let target,payload;
   globalThis.fetch=async(url,options)=>{
     target=url;payload=JSON.parse(options.body);
-    return new Response(JSON.stringify({output_audio:{data:wav.toString("base64"),mime_type:"audio/wav"}}),{status:200});
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{inlineData:{data:wav.toString("base64"),mimeType:"audio/wav"}}]}}]}),{status:200});
   };
   try{
     const request=new Request("https://example.test/api/tts",{
@@ -98,10 +98,10 @@ test("production worker generates Burmese WAV through Free Tier Gemini TTS",asyn
     const response=await appWorker.fetch(request,env);
     assert.equal(response.status,200);
     assert.equal(response.headers.get("content-type"),"audio/wav");
-    assert.equal(target,"https://generativelanguage.googleapis.com/v1beta/interactions");
-    assert.equal(payload.model,"gemini-3.8-flash-tts");
-    assert.ok(payload.input[0].content[0].annotations[0].style.includes("Burmese"));
-    assert.ok(payload.generation_config.speech_config[0].voice);
+    assert.equal(target,"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent");
+    assert.ok(payload.contents[0].parts[0].speechMetadata.style.includes("Burmese"));
+    assert.deepEqual(payload.generationConfig.responseModalities,["AUDIO"]);
+    assert.ok(payload.generationConfig.speechConfig.voiceConfig.voice);
   }finally{globalThis.fetch=previous}
 });
 test("production worker surfaces Gemini TTS free-tier quota without retrying",async()=>{
