@@ -15,12 +15,13 @@ test("returns 429 without pretending success",async()=>{
   try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true)}finally{globalThis.fetch=previous}
 });
 test("returns structured grounded recap",async()=>{
-  const previous=globalThis.fetch;let payload;
-  globalThis.fetch=async(_url,opts)=>{payload=JSON.parse(opts.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  const previous=globalThis.fetch;let payload,providerUrl;
+  globalThis.fetch=async(_url,opts)=>{providerUrl=_url;payload=JSON.parse(opts.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
   try{
     const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);
     const body=await r.json();assert.equal(body.mode,"transcript-plus-sampled-frames");
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
+    assert.match(providerUrl,/models\\/gemini-2\\.5-flash/);
     assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
   }finally{globalThis.fetch=previous}
 });
