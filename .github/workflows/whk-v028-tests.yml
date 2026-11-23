@@ -2,6 +2,8 @@ name: WHK v0.28 Prototype Tests
 on:
   push:
     branches: [dev/whk-recap-video-audio-v028]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   test:
