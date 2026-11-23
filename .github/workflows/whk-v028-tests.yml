@@ -59,7 +59,7 @@ jobs:
           curl --retry 5 --retry-delay 2 --retry-connrefused -fsS https://whk-movie-recap-staging.mmg88769.workers.dev/health | tee health.json
           grep -q '"mode":"integrated-prototype"' health.json
           grep -q '"ai_configured":true' health.json
-          for endpoint in api/transcribe-audio api/analyze-evidence; do
+          for endpoint in api/transcribe-audio api/analyze-evidence api/tts; do
             code=$(curl -sS -o /tmp/whk-endpoint.json -w '%{http_code}' -X POST \
               -H 'Authorization: Bearer invalid-smoke-test-token' \
               -H 'Content-Type: application/json' \
