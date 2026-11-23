@@ -18,7 +18,7 @@ test("accepts timestamped transcription using Gemini 3.8 Flash",async()=>{
 });
 test("surfaces provider status and safe detail on access errors",async()=>{
  const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"Model access restricted"}}),{status:403});
- try{const r=await worker.fetch(req(),env);assert.equal(r.status,502);const body=await r.json();assert.equal(body.provider_status,403);assert.match(body.detail,/restricted/)}finally{globalThis.fetch=old}
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,502);const body=await r.json();assert.equal(body.provider_status,403);assert.match(body.error,/HTTP 403/);assert.match(body.detail,/restricted/)}finally{globalThis.fetch=old}
 });
 test("rejects malformed provider timestamps",async()=>{
  const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:1200,end_ms:100,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
