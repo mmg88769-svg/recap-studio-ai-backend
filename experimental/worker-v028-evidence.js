@@ -60,8 +60,8 @@ export default {
     if(!response.ok){
       let provider={};try{provider=await response.json()}catch{}
       const detail=String(provider?.error?.message||"").slice(0,240);
-      return reply({error:"AI provider request failed",provider_status:response.status,
-        model:MODEL,detail,retryable:response.status>=500},502);
+      return reply({error:"AI provider request failed (HTTP "+response.status+"): "+(detail||"Provider error"),
+        provider_status:response.status,model:MODEL,detail,retryable:response.status>=500},502);
     }
     let data;
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}
