@@ -87,7 +87,7 @@ test("production worker generates Burmese WAV through Free Tier Gemini TTS",asyn
   let target,payload;
   globalThis.fetch=async(url,options)=>{
     target=url;payload=JSON.parse(options.body);
-    return new Response(JSON.stringify({steps:[{type:"model_output",content:[{type:"audio",data:wav.toString("base64")}]}]}),{status:200});
+    return new Response(JSON.stringify({output_audio:{data:wav.toString("base64"),mime_type:"audio/wav"}}),{status:200});
   };
   try{
     const request=new Request("https://example.test/api/tts",{
