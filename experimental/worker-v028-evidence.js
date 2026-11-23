@@ -1,10 +1,10 @@
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
-const MAX_BODY=3500000, MAX_TRANSCRIPT=50000, MAX_FRAMES=8;
+const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8;
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 function validate(input){
   if(!input || typeof input!=="object")return "JSON object required";
-  if(!Array.isArray(input.transcript_segments)||input.transcript_segments.length<1||input.transcript_segments.length>500)return "1-500 transcript_segments required";
+  if(!Array.isArray(input.transcript_segments)||input.transcript_segments.length<1||input.transcript_segments.length>2000)return "1-2000 transcript_segments required";
   let previous=-1,total=0;
   for(const s of input.transcript_segments){
     if(!Number.isFinite(s.start_ms)||!Number.isFinite(s.end_ms)||s.start_ms<0||s.end_ms<=s.start_ms||s.start_ms<previous||typeof s.text!=="string"||s.text.length>2000)return "Invalid or unsorted transcript segment";
