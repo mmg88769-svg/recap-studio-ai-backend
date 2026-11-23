@@ -13,3 +13,6 @@ jobs:
           node-version: '22'
       - run: node --check experimental/worker-v028-evidence.js
       - run: node --test tests/worker-v028.test.mjs
+
+      - name: Test video audio extraction and MP4 mixing
+        run: python3 tests/video_pipeline_smoke.py
