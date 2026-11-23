@@ -32,8 +32,17 @@ const styles = {
   dramatic: "dramatic, suspenseful movie narration, avoiding exaggerated acting"
 };
 
-const textModel = "gemini-3-flash-preview";
-const voiceModel = "gemini-3.8-flash-tts";
+// Test-branch default: prefer the model that still has healthy rate-limit status.
+// Override with TEXT_MODEL / VOICE_MODEL Cloudflare variables after testing.
+// Keep credential secrets in Cloudflare, never in the repository.
+const defaultTextModel = "gemini-2.5-flash";
+const defaultVoiceModel = "gemini-3.8-flash-tts";
+const modelName = (value, fallback) =>
+  typeof value === "string" && /^[a-z0-9][a-z0-9.-]{2,79}$/.test(value)
+    ? value : fallback;
+const textModelFor = env => modelName(env.TEXT_MODEL, defaultTextModel);
+const voiceModelFor = env => modelName(env.VOICE_MODEL, defaultVoiceModel);
+const providerStatus = result => result.status === 429 ? 429 : 502;
 
 async function gemini(env, model, payload) {
   const r = await fetch(
@@ -216,7 +225,7 @@ export default {
         "context or video duration limit, return an explicit limitation rather than " +
         "pretending to cover the entire film.";
       try {
-        const result = await gemini(env, textModel, {
+        const result = await gemini(env, textModelFor(env), {
           contents: [{role: "user", parts: [
             {fileData: {mimeType, fileUri}},
             {text: prompt}
@@ -227,7 +236,7 @@ export default {
           error: "Long video analysis failed",
           detail: result.error,
           status: result.status
-        }, 502);
+        }, providerStatus(result));
         const script = outputText(result.data);
         return script ? json({
           script,
@@ -261,7 +270,7 @@ export default {
         text;
 
       try {
-        const result = await gemini(env, textModel, {
+        const result = await gemini(env, textModelFor(env), {
           contents: [{parts: [{text: prompt}]}],
           generationConfig: {
             temperature: 0.2,
@@ -274,7 +283,7 @@ export default {
             error: "Translation failed",
             status: result.status,
             detail: result.error
-          }, 502);
+          }, providerStatus(result));
         }
 
         const translation = outputText(result.data);
@@ -321,7 +330,7 @@ export default {
         "Do not translate, add words, or add sound effects.";
 
       try {
-        const result = await gemini(env, voiceModel, {
+        const result = await gemini(env, voiceModelFor(env), {
           contents: [{
             role: "user",
             parts: [{
@@ -344,7 +353,7 @@ export default {
             error: "Gemini TTS failed",
             status: result.status,
             detail: result.error
-          }, 502);
+          }, providerStatus(result));
         }
 
         const inline = result.data?.candidates?.[0]?.content?.parts
@@ -407,7 +416,7 @@ export default {
       "Return only the Burmese script.\n\n" + source;
 
     try {
-      const result = await gemini(env, textModel, {
+      const result = await gemini(env, textModelFor(env), {
         contents: [{parts: [{text: prompt}]}],
         generationConfig: {
           temperature: 0.4,
@@ -420,7 +429,7 @@ export default {
           error: "Gemini API failed",
           status: result.status,
           detail: result.error
-        }, 502);
+        }, providerStatus(result));
       }
 
       const script = outputText(result.data);
