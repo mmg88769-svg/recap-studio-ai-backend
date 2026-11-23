@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../experimental/worker-v028-evidence.js";
+import appWorker from "../worker.js";
 const url="https://example.test/api/analyze-evidence";
 const env={APP_TOKEN:"test-token",GEMINI_API_KEY:"test-key"};
 const valid={transcript_segments:[{start_ms:0,end_ms:3000,text:"He entered the room and asked for help."}]};
@@ -42,4 +43,24 @@ test("rejects AI events without evidence references",async()=>{
   })}]}}]}),{status:200});
   try{assert.equal((await worker.fetch(post(valid),env)).status,502)}
   finally{globalThis.fetch=previous}
+});
+
+test("production worker exposes protected v0.28 health route",async()=>{
+  const r=await appWorker.fetch(new Request("https://example.test/health"),env);
+  assert.equal(r.status,200);
+  const body=await r.json();
+  assert.equal(body.version,"0.28-prototype");
+  assert.equal(body.deployed,false);
+});
+test("production worker routes evidence endpoint through token guard",async()=>{
+  const request=new Request("https://example.test/api/analyze-evidence",{
+    method:"POST",headers:{"content-type":"application/json",authorization:"Bearer wrong"},body:JSON.stringify(valid)
+  });
+  assert.equal((await appWorker.fetch(request,env)).status,401);
+});
+test("production worker routes audio transcription endpoint through token guard",async()=>{
+  const request=new Request("https://example.test/api/transcribe-audio",{
+    method:"POST",headers:{"content-type":"application/json",authorization:"Bearer wrong"},body:JSON.stringify({mime_type:"audio/wav",audio_base64:"YWJj"})
+  });
+  assert.equal((await appWorker.fetch(request,env)).status,401);
 });
