@@ -67,3 +67,39 @@ test("production worker routes audio transcription endpoint through token guard"
   });
   assert.equal((await appWorker.fetch(request,env)).status,401);
 });
+
+test("production worker generates Burmese WAV through Free Tier Gemini TTS",async()=>{
+  const previous=globalThis.fetch;
+  const wav=Buffer.alloc(44);wav.write("RIFF",0);wav.write("WAVE",8);
+  let target,payload;
+  globalThis.fetch=async(url,options)=>{
+    target=url;payload=JSON.parse(options.body);
+    return new Response(JSON.stringify({steps:[{type:"model_output",content:[{type:"audio",data:wav.toString("base64")}]}]}),{status:200});
+  };
+  try{
+    const request=new Request("https://example.test/api/tts",{
+      method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+      body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my",gender:"male",style:"cinematic"})
+    });
+    const response=await appWorker.fetch(request,env);
+    assert.equal(response.status,200);
+    assert.equal(response.headers.get("content-type"),"audio/wav");
+    assert.equal(target,"https://generativelanguage.googleapis.com/v1beta/interactions");
+    assert.equal(payload.model,"gemini-3.8-flash-tts");
+    assert.ok(payload.input[0].content[0].annotations[0].style.includes("Burmese"));
+    assert.ok(payload.generation_config.speech_config[0].voice);
+  }finally{globalThis.fetch=previous}
+});
+test("production worker surfaces Gemini TTS free-tier quota without retrying",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"quota"}}),{status:429});
+  try{
+    const request=new Request("https://example.test/api/tts",{
+      method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+      body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my"})
+    });
+    const response=await appWorker.fetch(request,env);
+    assert.equal(response.status,429);
+    assert.equal((await response.json()).retryable,true);
+  }finally{globalThis.fetch=previous}
+});
