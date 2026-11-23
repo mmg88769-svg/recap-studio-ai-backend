@@ -21,7 +21,7 @@ test("returns structured grounded recap",async()=>{
     const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);
     const body=await r.json();assert.equal(body.mode,"transcript-plus-sampled-frames");
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
-    assert.match(providerUrl,/models\\/gemini-2\\.5-flash/);
+    assert.ok(providerUrl.includes("models/gemini-2.5-flash"));
     assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
   }finally{globalThis.fetch=previous}
 });
