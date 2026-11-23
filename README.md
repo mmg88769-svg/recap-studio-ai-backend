@@ -10,7 +10,7 @@ This branch adds protected, isolated prototype routes to the existing Worker. Th
 - `POST /api/tts` — Burmese narrator WAV using Gemini 3.8 Flash TTS (Free Tier)
 - Existing `/api/generate`, `/api/tts`, and `/api/translate` routes remain in `worker.js`
 
-The prototype uses **Gemini 3.8 Flash** for audio transcription and transcript-plus-frame recap analysis, and **Gemini 3.8 Flash TTS** for Burmese narration. Gemini 2.5 Flash access is restricted to existing users who actively used it in the past, so new projects should migrate. Google currently lists Gemini 3.8 Flash and Gemini 3.8 Flash TTS with Free Tier access; quota/rate limits still apply. No paid billing is enabled or required by this code. Free-tier quota responses return a retryable 429.
+The prototype uses **Gemini 3.8 Flash** for audio transcription and transcript-plus-frame recap analysis, and **Gemini 3.8 Flash TTS** for Burmese narration. Gemini 2.5 Flash access is restricted to existing users who actively used it in the past, so new projects should migrate. Google currently lists Gemini 3.8 Flash and Gemini 3.8 Flash TTS with Free Tier access; quota/rate limits still apply. No paid billing is enabled or required by this code. Transient provider 5xx/network failures are retried up to three attempts with short backoff; Free Tier 429 quota responses are returned without automatic retries to avoid wasting quota.
 
 ## Staging deployment
 

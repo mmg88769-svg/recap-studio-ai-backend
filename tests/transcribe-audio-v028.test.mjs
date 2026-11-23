@@ -7,9 +7,19 @@ function req(data=payload,token="test-token"){return new Request("https://exampl
 test("requires token",async()=>assert.equal((await worker.fetch(req(payload,"invalid"),env)).status,401));
 test("rejects invalid audio",async()=>assert.equal((await worker.fetch(req({...payload,audio_base64:"not base64!"}),env)).status,400));
 test("rejects unsupported MIME",async()=>assert.equal((await worker.fetch(req({...payload,mime_type:"text/plain"}),env)).status,400));
-test("handles quota errors",async()=>{
- const old=globalThis.fetch;globalThis.fetch=async()=>new Response("quota",{status:429});
- try{const r=await worker.fetch(req(),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true)}finally{globalThis.fetch=old}
+test("handles quota errors without retrying",async()=>{
+ const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response("quota",{status:429})};
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true);assert.equal(calls,1)}finally{globalThis.fetch=old}
+});
+test("retries transient Gemini 503 overload and succeeds",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ const provider={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify(provider),{status:200})};
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,200);assert.equal(calls,3);assert.equal((await r.json()).transcript_segments[0].text,"Hello")}finally{globalThis.fetch=old}
+});
+test("stops after three transient provider failures and marks them retryable",async()=>{
+ const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,3);assert.equal(body.attempts,3);assert.equal(body.retryable,true);assert.equal(body.provider_status,503)}finally{globalThis.fetch=old}
 });
 test("accepts timestamped transcription using Gemini 3.8 Flash",async()=>{
  const old=globalThis.fetch;let target;

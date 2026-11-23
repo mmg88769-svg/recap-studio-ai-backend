@@ -2,6 +2,25 @@
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
+const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function fetchWithTransientRetry(url, options) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (!RETRYABLE_PROVIDER_STATUSES.has(response.status) || attempt === 3)
+        return {response, attempts: attempt};
+      try { await response.body?.cancel(); } catch {}
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) throw error;
+    }
+    await wait(attempt * 750);
+  }
+  throw lastError || new Error("AI provider unavailable");
+}
+
 function validate(input){
   if(!input || typeof input!=="object")return "JSON object required";
   if(!Array.isArray(input.transcript_segments)||input.transcript_segments.length<1||input.transcript_segments.length>2000)return "1-2000 transcript_segments required";
@@ -49,19 +68,21 @@ export default {
       parts.push({text:`Sampled frame at ${frame.time_ms} ms (visual context only):`});
       parts.push({inline_data:{mime_type:"image/jpeg",data:frame.jpeg_base64}});
     }
-    let response;
+    let response, attempts = 0;
     try{
-      response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
+      const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
         method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
         body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
       });
-    }catch{return reply({error:"AI provider temporarily unreachable",retryable:true},503);}
-    if(response.status===429)return reply({error:"AI free-tier quota/rate limit",retryable:true,retry_after_seconds:60},429);
+      response=result.response;
+      attempts=result.attempts;
+    }catch{return reply({error:"AI provider temporarily unreachable after three attempts",retryable:true,attempts:3,retry_after_seconds:15},503);}
+    if(response.status===429)return reply({error:"AI free-tier quota/rate limit",retryable:true,retry_after_seconds:60,attempts},429);
     if(!response.ok){
       let provider={};try{provider=await response.json()}catch{}
       const detail=String(provider?.error?.message||"").slice(0,240);
       return reply({error:"AI provider request failed (HTTP "+response.status+"): "+(detail||"Provider error"),
-        provider_status:response.status,model:MODEL,detail,retryable:response.status>=500},502);
+        provider_status:response.status,model:MODEL,detail,retryable:response.status>=500,attempts},502);
     }
     let data;
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}

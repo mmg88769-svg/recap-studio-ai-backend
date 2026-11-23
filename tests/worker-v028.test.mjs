@@ -10,9 +10,18 @@ test("rejects missing authorization before parsing",async()=>{const r=await work
 test("rejects missing transcript",async()=>{const r=await worker.fetch(post({transcript_segments:[]}),env);assert.equal(r.status,400)});
 test("rejects invalid timestamps",async()=>{const r=await worker.fetch(post({transcript_segments:[{start_ms:4,end_ms:2,text:"a"}]}),env);assert.equal(r.status,400)});
 test("rejects more than eight frames",async()=>{const r=await worker.fetch(post({...valid,frames:Array.from({length:9},(_,i)=>({time_ms:i,jpeg_base64:"YWJj"}))}),env);assert.equal(r.status,400)});
-test("returns 429 without pretending success",async()=>{
-  const previous=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"quota"}}),{status:429});
-  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true)}finally{globalThis.fetch=previous}
+test("returns 429 without pretending success or retrying quota",async()=>{
+  const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota"}}),{status:429})};
+  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true);assert.equal(calls,1)}finally{globalThis.fetch=previous}
+});
+test("retries transient Gemini 503 evidence overload and succeeds",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);assert.equal(calls,3);assert.equal((await r.json()).narration_my,"ဇာတ်လမ်း")}finally{globalThis.fetch=previous}
+});
+test("reports the final retry count after repeated Gemini 503 evidence failures",async()=>{
+  const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
+  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,3);assert.equal(body.attempts,3);assert.equal(body.retryable,true);assert.equal(body.provider_status,503)}finally{globalThis.fetch=previous}
 });
 test("returns structured grounded recap",async()=>{
   const previous=globalThis.fetch;let payload,providerUrl;
@@ -102,6 +111,15 @@ test("production worker generates Burmese WAV through Free Tier Gemini TTS",asyn
     assert.equal(payload.model,"gemini-3.8-flash-tts");
     assert.ok(payload.input[0].content[0].annotations[0].style.includes("Burmese"));
     assert.deepEqual(payload.generation_config.speech_config,[{voice:"Charon"}]);
+  }finally{globalThis.fetch=previous}
+});
+test("production worker retries transient Gemini TTS 503 and returns Burmese WAV",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  const wav=Buffer.alloc(44);wav.write("RIFF",0);wav.write("WAVE",8);
+  globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({steps:[{type:"model_output",content:[{type:"audio",data:wav.toString("base64"),mime_type:"audio/wav"}]}]}),{status:200})};
+  try{
+    const request=new Request("https://example.test/api/tts",{method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my"})});
+    const response=await appWorker.fetch(request,env);assert.equal(response.status,200);assert.equal(response.headers.get("content-type"),"audio/wav");assert.equal(calls,3);
   }finally{globalThis.fetch=previous}
 });
 test("production worker surfaces Gemini TTS free-tier quota without retrying",async()=>{

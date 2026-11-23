@@ -38,29 +38,58 @@ const styles = {
 const textModel = "gemini-3.8-flash";
 const voiceModel = "gemini-3.8-flash-tts";
 
-async function gemini(env, model, payload) {
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": env.GEMINI_API_KEY
-      },
-      body: JSON.stringify(payload)
+const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function fetchWithTransientRetry(url, options) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (!RETRYABLE_PROVIDER_STATUSES.has(response.status) || attempt === 3)
+        return {response, attempts: attempt};
+      try { await response.body?.cancel(); } catch {}
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) throw error;
     }
-  );
+    await wait(attempt * 750);
+  }
+  throw lastError || new Error("AI provider unavailable");
+}
 
-  const data = await r.json();
+async function gemini(env, model, payload) {
+  let response, attempts = 0;
+  try {
+    const result = await fetchWithTransientRetry(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": env.GEMINI_API_KEY
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+    response = result.response;
+    attempts = result.attempts;
+  } catch {
+    return {error:"AI provider temporarily unavailable after three attempts",status:503,attempts:3};
+  }
 
-  if (!r.ok) {
+  let data;
+  try { data = await response.json(); }
+  catch { return {error:"Invalid AI provider response",status:502,attempts}; }
+
+  if (!response.ok) {
     return {
       error: data?.error?.message?.slice(0, 250) || "AI provider error",
-      status: r.status
+      status: response.status,
+      attempts
     };
   }
 
-  return {data};
+  return {data,attempts};
 }
 
 const outputText = (data) =>
@@ -165,7 +194,9 @@ export default {
           return json({
             error: "Translation failed",
             status: result.status,
-            detail: result.error
+            detail: result.error,
+            attempts: result.attempts,
+            retryable: result.status >= 500
           }, 502);
         }
 
@@ -198,7 +229,7 @@ export default {
         `Use ${styles[style]}. Speak clearly with natural pauses. Do not translate, add words, or add sound effects.`;
 
       try {
-        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+        const retried = await fetchWithTransientRetry("https://generativelanguage.googleapis.com/v1beta/interactions", {
           method:"POST",
           headers:{
             "Content-Type":"application/json",
@@ -218,14 +249,17 @@ export default {
             generation_config:{speech_config:[{voice}]}
           })
         });
+        const response = retried.response;
+        const attempts = retried.attempts;
         let data;
         try { data=await response.json(); }
-        catch { return json({error:"Invalid Gemini TTS response"},502); }
+        catch { return json({error:"Invalid Gemini TTS response",attempts},502); }
         if (response.status===429)
-          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60},429);
+          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60,attempts},429);
         if (!response.ok)
           return json({error:"Gemini TTS failed (HTTP "+response.status+"): "+(data?.error?.message?.slice(0,250)||"Provider error"),
-            provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
+            provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error",
+            retryable:response.status>=500,attempts},502);
 
         // REST Interactions responses expose generated audio in steps[].content[].
         const stepAudio=(data?.steps||[])
@@ -252,7 +286,7 @@ export default {
           }
         });
       } catch {
-        return json({error:"Gemini TTS service unavailable",retryable:true},502);
+        return json({error:"Gemini TTS service unavailable after retries",retryable:true,attempts:3,retry_after_seconds:15},502);
       }
     }
 
@@ -286,7 +320,9 @@ export default {
         return json({
           error: "Gemini API failed",
           status: result.status,
-          detail: result.error
+          detail: result.error,
+          attempts: result.attempts,
+          retryable: result.status >= 500
         }, 502);
       }
 
