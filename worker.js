@@ -198,40 +198,43 @@ export default {
         `Use ${styles[style]}. Speak clearly with natural pauses. Do not translate, add words, or add sound effects.`;
 
       try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${voiceModel}:generateContent`,
-          {
-            method:"POST",
-            headers:{
-              "Content-Type":"application/json",
-              "x-goog-api-key":env.GEMINI_API_KEY
-            },
-            body:JSON.stringify({
-              contents:[{
-                role:"user",
-                parts:[{text,speechMetadata:{style:direction}}]
-              }],
-              generationConfig:{
-                responseModalities:["AUDIO"],
-                speechConfig:{voiceConfig:{voice}}
-              }
-            })
-          }
-        );
+        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "x-goog-api-key":env.GEMINI_API_KEY
+          },
+          body:JSON.stringify({
+            model:voiceModel,
+            input:[{
+              type:"user_input",
+              content:[{
+                type:"text",
+                text,
+                annotations:[{type:"speech_metadata",style:direction}]
+              }]
+            }],
+            response_format:{type:"audio"},
+            generation_config:{speech_config:[{voice}]}
+          })
+        });
         let data;
         try { data=await response.json(); }
         catch { return json({error:"Invalid Gemini TTS response"},502); }
         if (response.status===429)
           return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60},429);
         if (!response.ok)
-          return json({error:"Gemini TTS failed",provider_status:response.status,
-            detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
+          return json({error:"Gemini TTS failed (HTTP "+response.status+"): "+(data?.error?.message?.slice(0,250)||"Provider error"),
+            provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
 
-        const audioPart=(data?.candidates||[])
-          .flatMap(candidate=>candidate?.content?.parts||[])
-          .find(part=>typeof (part?.inlineData?.data||part?.inline_data?.data)==="string");
-        const audioData=audioPart?.inlineData?.data||audioPart?.inline_data?.data;
-        const audioMime=audioPart?.inlineData?.mimeType||audioPart?.inline_data?.mime_type||"audio/wav";
+        // REST Interactions responses expose generated audio in steps[].content[].
+        const stepAudio=(data?.steps||[])
+          .filter(step=>step?.type==="model_output")
+          .flatMap(step=>step.content||[])
+          .filter(part=>part?.type==="audio"&&typeof part.data==="string")
+          .at(-1);
+        const audioData=stepAudio?.data;
+        const audioMime=stepAudio?.mime_type||"audio/wav";
         if (!audioData) return json({error:"No voice audio returned"},502);
 
         const binary=atob(audioData);
