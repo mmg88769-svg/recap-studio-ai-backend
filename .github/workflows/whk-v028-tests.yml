@@ -28,3 +28,6 @@ jobs:
 
       - name: Validate real scene-cut and narration MP4 render
         run: python3 -m unittest discover -s tests -p 'test_render_recap.py'
+
+      - name: Validate offline recap orchestration
+        run: python3 -m unittest discover -s tests -p 'test_offline_pipeline.py'
