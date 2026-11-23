@@ -22,7 +22,7 @@ function validate(input){
 export default {
   async fetch(request,env){
     const path=new URL(request.url).pathname;
-    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",deployed:false,analysis:"timestamped transcript and sampled frames"});
+    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",capabilities:["audio-transcription","transcript-plus-sampled-frames"]});
     if(request.method!=="POST"||path!=="/api/analyze-evidence")return reply({error:"Not found"},404);
     if(!env.APP_TOKEN||!env.GEMINI_API_KEY)return reply({error:"Server not configured"},503);
     if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return reply({error:"Unauthorized"},401);
