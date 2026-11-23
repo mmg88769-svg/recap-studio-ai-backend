@@ -18,7 +18,7 @@ export default {
   const instruction="Transcribe the spoken dialogue of this short audio clip in its original language. Include accurate clip-relative millisecond timestamps for each spoken segment. Do not invent speech. For non-speech clips, return an empty segments array. Output JSON object with segments array of {start_ms,end_ms,text,language} and uncertainties array of strings.";
   let response;
   try{
-   response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent",{
+   response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
     method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
     body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",temperature:0,maxOutputTokens:8192}})
    });
