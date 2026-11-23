@@ -227,17 +227,21 @@ export default {
           return json({error:"Gemini TTS failed",provider_status:response.status,
             detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
 
-        const audioBlock=(data?.steps||[])
+        // The documented Interactions REST response exposes output_audio.data.
+        // Keep steps parsing as a compatibility fallback for earlier preview payloads.
+        const stepAudio=(data?.steps||[])
           .filter(step=>step?.type==="model_output")
           .flatMap(step=>step.content||[])
           .filter(part=>part?.type==="audio"&&typeof part.data==="string")
           .at(-1);
-        if (!audioBlock?.data) return json({error:"No voice audio returned"},502);
+        const audioData=data?.output_audio?.data||stepAudio?.data;
+        const audioMime=data?.output_audio?.mime_type||stepAudio?.mime_type||"audio/wav";
+        if (!audioData) return json({error:"No voice audio returned"},502);
 
-        const binary=atob(audioBlock.data);
+        const binary=atob(audioData);
         if(binary.length>8000000)return json({error:"Audio too long"},413);
         if(binary.slice(0,4)!=="RIFF"||binary.slice(8,12)!=="WAVE")
-          return json({error:"Gemini did not return a WAV container",format:audioBlock.mime_type||"unknown"},502);
+          return json({error:"Gemini did not return a WAV container",format:audioMime},502);
 
         const bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
         return new Response(bytes,{
