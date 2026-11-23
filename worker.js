@@ -1,3 +1,6 @@
+import evidenceWorker from "./experimental/worker-v028-evidence.js";
+import transcriptionWorker from "./experimental/transcribe-audio-v028.js";
+
 
 // Recap Studio AI v0.6
 // Keep API keys only in Cloudflare Secrets.
@@ -69,6 +72,14 @@ const outputText = (data) =>
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // v0.28 protected prototype endpoints; legacy routes remain unchanged.
+    if (url.pathname === "/health" || url.pathname === "/api/analyze-evidence") {
+      return evidenceWorker.fetch(request, env);
+    }
+    if (url.pathname === "/api/transcribe-audio") {
+      return transcriptionWorker.fetch(request, env);
+    }
 
     if (request.method === "GET") {
       return json({
