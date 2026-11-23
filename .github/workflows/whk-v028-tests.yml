@@ -58,3 +58,4 @@ jobs:
           set -euo pipefail
           curl --retry 5 --retry-delay 2 --retry-connrefused -fsS https://whk-movie-recap-staging.mmg88769.workers.dev/health | tee health.json
           grep -q '"mode":"integrated-prototype"' health.json
+          grep -q '"ai_configured":true' health.json
