@@ -182,102 +182,75 @@ export default {
     }
 
     if (tts) {
-      const text =
-        typeof input?.text === "string" ? input.text.trim() : "";
+      const text = typeof input?.text === "string" ? input.text.trim() : "";
+      const language = languageNames[input?.language] ? input.language : "my";
+      const gender = input?.gender === "female" ? "female" : "male";
+      const age = ageNames[input?.age] ? input.age : "adult";
+      const style = styles[input?.style] ? input.style : "cinematic";
 
-      const language = languageNames[input?.language]
-        ? input.language : "my";
-
-      const gender = input?.gender === "female"
-        ? "female" : "male";
-
-      const age = ageNames[input?.age]
-        ? input.age : "adult";
-
-      const style = styles[input?.style]
-        ? input.style : "cinematic";
-
-      if (text.length < 2 || text.length > 1400) {
-        return json({
-          error: "Voice text must be 2 to 1400 characters"
-        }, 400);
-      }
+      if (text.length < 2 || text.length > 2500)
+        return json({error:"Voice text must be 2 to 2500 characters"},400);
 
       const voice = gender === "male"
         ? (age === "mature" ? "Fenrir" : "Charon")
         : (age === "young" ? "Aoede" : "Kore");
-
       const direction =
-        `Read the exact text fluently in ${languageNames[language]} ` +
-        `using a ${ageNames[age]}-sounding ${gender} narrator persona. ` +
-        `Use ${styles[style]}. Speak clearly with natural pauses. ` +
-        "Do not translate, add words, or add sound effects.";
+        `Read the exact text fluently in ${languageNames[language]} using a ${ageNames[age]}-sounding ${gender} narrator persona. ` +
+        `Use ${styles[style]}. Speak clearly with natural pauses. Do not translate, add words, or add sound effects.`;
 
       try {
-        const result = await gemini(env, voiceModel, {
-          contents: [{
-            role: "user",
-            parts: [{
-              text,
-              speechMetadata: {
-                style: direction
-              }
-            }]
-          }],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {voice}
-            }
+        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "x-goog-api-key":env.GEMINI_API_KEY
+          },
+          body:JSON.stringify({
+            model:voiceModel,
+            input:[{
+              type:"user_input",
+              content:[{
+                type:"text",
+                text,
+                annotations:[{type:"speech_metadata",style:direction}]
+              }]
+            }],
+            response_format:{type:"audio"},
+            generation_config:{speech_config:[{voice}]}
+          })
+        });
+        let data;
+        try { data=await response.json(); }
+        catch { return json({error:"Invalid Gemini TTS response"},502); }
+        if (response.status===429)
+          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60},429);
+        if (!response.ok)
+          return json({error:"Gemini TTS failed",provider_status:response.status,
+            detail:data?.error?.message?.slice(0,250)||"Provider error"},502);
+
+        const audioBlock=(data?.steps||[])
+          .filter(step=>step?.type==="model_output")
+          .flatMap(step=>step.content||[])
+          .filter(part=>part?.type==="audio"&&typeof part.data==="string")
+          .at(-1);
+        if (!audioBlock?.data) return json({error:"No voice audio returned"},502);
+
+        const binary=atob(audioBlock.data);
+        if(binary.length>8000000)return json({error:"Audio too long"},413);
+        if(binary.slice(0,4)!=="RIFF"||binary.slice(8,12)!=="WAVE")
+          return json({error:"Gemini did not return a WAV container",format:audioBlock.mime_type||"unknown"},502);
+
+        const bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
+        return new Response(bytes,{
+          status:200,
+          headers:{
+            "Content-Type":"audio/wav",
+            "Cache-Control":"no-store",
+            "Content-Disposition":"attachment; filename=whk-gemini-narration.wav"
           }
         });
-
-        if (result.error) {
-          return json({
-            error: "Gemini TTS failed",
-            status: result.status,
-            detail: result.error
-          }, 502);
-        }
-
-        const inline = result.data?.candidates?.[0]?.content?.parts
-          ?.find(p => p?.inlineData?.data)?.inlineData;
-
-        if (!inline?.data) {
-          return json({error: "No voice audio returned"}, 502);
-        }
-
-        const binary = atob(inline.data);
-
-        if (binary.length > 8000000) {
-          return json({error: "Audio too long"}, 413);
-        }
-
-        if (
-          binary.slice(0, 4) !== "RIFF" ||
-          binary.slice(8, 12) !== "WAVE"
-        ) {
-          return json({
-            error: "Provider did not return WAV audio",
-            format: inline.mimeType || "unknown"
-          }, 502);
-        }
-
-        const bytes = Uint8Array.from(
-          binary, c => c.charCodeAt(0)
-        );
-
-        return new Response(bytes, {
-          status: 200,
-          headers: {
-            "Content-Type": "audio/wav",
-            "Cache-Control": "no-store",
-            "Content-Disposition": "attachment; filename=recap-voice.wav"
-          }
-        });
-
       } catch {
-        return json({error: "Voice service request failed"}, 502);
+        return json({error:"Gemini TTS service unavailable",retryable:true},502);
       }
     }
 
