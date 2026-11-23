@@ -21,8 +21,21 @@ test("returns structured grounded recap",async()=>{
     const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);
     const body=await r.json();assert.equal(body.mode,"transcript-plus-sampled-frames");
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
-    assert.ok(providerUrl.includes("models/gemini-2.5-flash"));
+    assert.ok(providerUrl.includes("models/gemini-3.8-flash"));
+    assert.equal(body.model,"gemini-3.8-flash");
     assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+  }finally{globalThis.fetch=previous}
+});
+
+
+test("surfaces safe Gemini provider diagnostics on model-access failures",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"Model access is restricted"}}),{status:403});
+  try{
+    const r=await worker.fetch(post(valid),env);assert.equal(r.status,502);
+    const body=await r.json();assert.equal(body.provider_status,403);
+    assert.match(body.detail,/restricted/);
+    assert.equal(body.model,"gemini-3.8-flash");
   }finally{globalThis.fetch=previous}
 });
 
