@@ -1,6 +1,8 @@
 name: Deploy W.H.K Video AI to Cloudflare STAGING
 
 on:
+  push:
+    branches: [dev/whk-recap-video-audio-v028]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +20,7 @@ jobs:
       - name: Checkout reviewed AI feature branch
         uses: actions/checkout@v4
         with:
-          ref: feature/whk-video-analysis-v010
+          ref: dev/whk-recap-video-audio-v028
           persist-credentials: false
 
       - name: Verify Cloudflare deployment credentials exist
@@ -42,6 +44,16 @@ jobs:
           npx --yes wrangler@4 deploy worker.js \
             --name whk-movie-recap-staging \
             --compatibility-date 2026-11-01
+      - name: Verify v0.28 staging API routes and secrets
+        run: |
+          set -euo pipefail
+          HEALTH="$(curl --silent --show-error --fail https://whk-movie-recap-staging.mmg88769.workers.dev/health)"
+          echo "$HEALTH" | python -c 'import json,sys; d=json.load(sys.stdin); assert d.get("version") == "0.28-prototype", d; assert d.get("ai_configured") is True, "Cloudflare Worker must have APP_TOKEN and GEMINI_API_KEY secrets configured"; print("Staging health OK:", d.get("version"), d.get("capabilities"))'
+          for route in /api/transcribe-audio /api/analyze-evidence /api/tts; do
+            STATUS="$(curl --silent --show-error --output /tmp/route-check.json --write-out '%{http_code}' --request POST "https://whk-movie-recap-staging.mmg88769.workers.dev$route" --header 'Content-Type: application/json' --data '{}')"
+            test "$STATUS" = "401" || { echo "::error::Unexpected $STATUS from $route (expected protected route HTTP 401 without token)"; cat /tmp/route-check.json; exit 1; }
+            echo "Protected route exists: $route"
+          done
 
       - name: Deployment note
         run: |
