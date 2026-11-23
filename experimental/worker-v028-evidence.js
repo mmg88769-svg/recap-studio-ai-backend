@@ -1,7 +1,7 @@
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
-const FALLBACK_MODEL="gemini-3.5-flash-lite";
+const FALLBACK_MODELS=["gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -79,14 +79,18 @@ export default {
       attempts=result.attempts;
     }catch{return reply({error:"AI provider temporarily unreachable after three attempts",retryable:true,attempts:3,retry_after_seconds:15},503);}
     // Only HTTP 503 overload can trigger this free-tier backup model.
-    if(response.status===503){
+    for(const fallbackModel of FALLBACK_MODELS){
+      if(!RETRYABLE_PROVIDER_STATUSES.has(response.status))break;
       try{
-        response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL}:generateContent`,{
+        const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
           method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
           body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
         });
-        attempts++;activeModel=FALLBACK_MODEL;fallback_used=true;
-      }catch{return reply({error:"Both AI models temporarily unreachable",retryable:true,model:FALLBACK_MODEL,attempts,retry_after_seconds:60},503);}
+        response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;
+      }catch{
+        attempts++;activeModel=fallbackModel;fallback_used=true;
+        response=new Response(JSON.stringify({error:{message:"Fallback provider temporarily unreachable"}}),{status:503,headers:{"content-type":"application/json"}});
+      }
     }
     if(response.status===429)return reply({error:"AI free-tier quota/rate limit",retryable:true,retry_after_seconds:60,attempts},429);
     if(!response.ok){

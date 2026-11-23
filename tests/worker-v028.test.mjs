@@ -21,7 +21,7 @@ test("retries transient Gemini 503 evidence overload and succeeds",async()=>{
 });
 test("reports the final retry count after repeated Gemini 503 evidence failures",async()=>{
   const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
-  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,4);assert.equal(body.attempts,4);assert.equal(body.retryable,true);assert.equal(body.provider_status,503);assert.equal(body.model,"gemini-3.5-flash-lite")}finally{globalThis.fetch=previous}
+  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,5);assert.equal(body.attempts,5);assert.equal(body.retryable,true);assert.equal(body.provider_status,503);assert.equal(body.model,"gemini-3.1-flash-lite")}finally{globalThis.fetch=previous}
 });
 test("returns structured grounded recap",async()=>{
   const previous=globalThis.fetch;let payload,providerUrl;
@@ -176,8 +176,11 @@ test("production worker surfaces Gemini TTS free-tier quota without retrying",as
   }finally{globalThis.fetch=previous}
 });
 
-test("uses Lite for timestamped transcript plus frames after primary 503",async()=>{
+test("uses second free-tier Lite model for transcript and frames after repeated overload",async()=>{
  const old=globalThis.fetch;let calls=0;const urls=[];
- globalThis.fetch=async url=>{calls++;urls.push(url);return calls<=3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
- try{const r=await worker.fetch(post(valid),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,4);assert.equal(j.model,"gemini-3.5-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
+ globalThis.fetch=async url=>{calls++;urls.push(url);
+  return calls<=4?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):
+   new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(post(valid),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,5);assert.equal(j.model,"gemini-3.1-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));assert.ok(urls[4].includes("gemini-3.1-flash-lite"))}finally{globalThis.fetch=old}
 });
