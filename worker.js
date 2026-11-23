@@ -74,7 +74,16 @@ export default {
     const url = new URL(request.url);
 
     // v0.28 protected prototype endpoints; legacy routes remain unchanged.
-    if (url.pathname === "/health" || url.pathname === "/api/analyze-evidence") {
+    if (url.pathname === "/health" && request.method === "GET") {
+      return json({
+        status: "online",
+        version: "0.28-prototype",
+        mode: "integrated-prototype",
+        capabilities: ["audio-transcription", "transcript-plus-sampled-frames"],
+        ai_configured: Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
+      });
+    }
+    if (url.pathname === "/api/analyze-evidence") {
       return evidenceWorker.fetch(request, env);
     }
     if (url.pathname === "/api/transcribe-audio") {
