@@ -62,7 +62,14 @@ export default {
     if(!raw)return reply({error:"No recap generated"},502);
     try{
       const result=JSON.parse(raw);
-      if(typeof result.narration_my!=="string"||!Array.isArray(result.events)||!Array.isArray(result.uncertainties))throw Error("shape");
+      if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>20000||!Array.isArray(result.events)||result.events.length>500||!Array.isArray(result.uncertainties)||result.uncertainties.length>100)throw Error("shape");
+      if(result.uncertainties.some(x=>typeof x!=="string"||x.length>1000))throw Error("uncertainty");
+      const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
+      let previousStart=-1;
+      for(const event of result.events){
+        if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms)||event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime||event.start_ms<previousStart||typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000||!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))throw Error("event");
+        previousStart=event.start_ms;
+      }
       return reply({version:"0.28-prototype",mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
     }catch{return reply({error:"AI returned invalid recap structure"},502);}
   }
