@@ -23,3 +23,23 @@ test("returns structured grounded recap",async()=>{
     assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
   }finally{globalThis.fetch=previous}
 });
+
+test("rejects AI events outside supplied evidence timeline",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"ဇာတ်လမ်း",events:[{start_ms:10000,end_ms:12000,summary_my:"Invented scene",evidence:["unverified"]}],uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);
+    assert.equal(r.status,502);
+    assert.match((await r.json()).error,/invalid recap structure/);
+  }finally{globalThis.fetch=previous}
+});
+test("rejects AI events without evidence references",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:2000,summary_my:"Claim",evidence:[]}],uncertainties:[]
+  })}]}}]}),{status:200});
+  try{assert.equal((await worker.fetch(post(valid),env)).status,502)}
+  finally{globalThis.fetch=previous}
+});
