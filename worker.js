@@ -37,6 +37,7 @@ const styles = {
 
 const textModel = "gemini-3.8-flash";
 const voiceModel = "gemini-3.8-flash-tts";
+const fallbackVoiceModel = "gemini-3.8-flash-lite-tts";
 
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -229,36 +230,49 @@ export default {
         `Use ${styles[style]}. Speak clearly with natural pauses. Do not translate, add words, or add sound effects.`;
 
       try {
-        const retried = await fetchWithTransientRetry("https://generativelanguage.googleapis.com/v1beta/interactions", {
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "x-goog-api-key":env.GEMINI_API_KEY
-          },
-          body:JSON.stringify({
-            model:voiceModel,
-            input:[{
-              type:"user_input",
-              content:[{
-                type:"text",
-                text,
-                annotations:[{type:"speech_metadata",style:direction}]
-              }]
-            }],
-            response_format:{type:"audio"},
-            generation_config:{speech_config:[{voice}]}
-          })
+        const interactionUrl="https://generativelanguage.googleapis.com/v1beta/interactions";
+        const requestBody=model=>JSON.stringify({
+          model,
+          input:[{
+            type:"user_input",
+            content:[{
+              type:"text",text,
+              annotations:[{type:"speech_metadata",style:direction}]
+            }]
+          }],
+          response_format:{type:"audio"},
+          generation_config:{speech_config:[{voice}]}
         });
-        const response = retried.response;
-        const attempts = retried.attempts;
+        const headers={"Content-Type":"application/json","x-goog-api-key":env.GEMINI_API_KEY};
+        const primary=await fetchWithTransientRetry(interactionUrl,{
+          method:"POST",headers,body:requestBody(voiceModel)
+        });
+        let response=primary.response;
+        let attempts=primary.attempts;
+        let activeModel=voiceModel;
+        let fallbackUsed=false;
+        // A temporary capacity error (503) can affect one TTS model.
+        // Free-tier Lite is a compatible secondary voice model, not a paid service.
+        if(response.status===503){
+          try { await response.body?.cancel(); } catch {}
+          const secondary=await fetch(interactionUrl,{
+            method:"POST",headers,body:requestBody(fallbackVoiceModel)
+          });
+          response=secondary;
+          attempts+=1;
+          activeModel=fallbackVoiceModel;
+          fallbackUsed=true;
+        }
         let data;
         try { data=await response.json(); }
-        catch { return json({error:"Invalid Gemini TTS response",attempts},502); }
-        if (response.status===429)
-          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60,attempts},429);
-        if (!response.ok)
+        catch { return json({error:"Invalid Gemini TTS response",model:activeModel,fallback_used:fallbackUsed,attempts},502); }
+        if(response.status===429)
+          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60,
+            model:activeModel,fallback_used:fallbackUsed,attempts},429);
+        if(!response.ok)
           return json({error:"Gemini TTS failed (HTTP "+response.status+"): "+(data?.error?.message?.slice(0,250)||"Provider error"),
             provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error",
+            model:activeModel,fallback_used:fallbackUsed,
             retryable:response.status>=500,attempts},502);
 
         // REST Interactions responses expose generated audio in steps[].content[].
@@ -282,7 +296,9 @@ export default {
           headers:{
             "Content-Type":"audio/wav",
             "Cache-Control":"no-store",
-            "Content-Disposition":"attachment; filename=whk-gemini-narration.wav"
+            "Content-Disposition":"attachment; filename=whk-gemini-narration.wav",
+            "X-WHK-Voice-Model":activeModel,
+            "X-WHK-Voice-Fallback":String(fallbackUsed)
           }
         });
       } catch {

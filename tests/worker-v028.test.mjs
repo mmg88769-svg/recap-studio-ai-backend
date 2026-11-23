@@ -122,6 +122,46 @@ test("production worker retries transient Gemini TTS 503 and returns Burmese WAV
     const response=await appWorker.fetch(request,env);assert.equal(response.status,200);assert.equal(response.headers.get("content-type"),"audio/wav");assert.equal(calls,3);
   }finally{globalThis.fetch=previous}
 });
+test("production worker switches to free-tier Lite TTS after persistent 503",async()=>{
+  const previous=globalThis.fetch;let calls=0;const models=[];
+  const wav=Buffer.alloc(44);wav.write("RIFF",0);wav.write("WAVE",8);
+  globalThis.fetch=async(url,options)=>{
+    calls++;
+    const body=JSON.parse(options.body);
+    models.push(body.model);
+    return calls<=3
+      ? new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})
+      : new Response(JSON.stringify({steps:[{type:"model_output",content:[{type:"audio",data:wav.toString("base64"),mime_type:"audio/wav"}]}]}),{status:200});
+  };
+  try{
+    const request=new Request("https://example.test/api/tts",{method:"POST",
+      headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+      body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my",gender:"female"})});
+    const result=await appWorker.fetch(request,env);
+    assert.equal(result.status,200);
+    assert.equal(result.headers.get("content-type"),"audio/wav");
+    assert.equal(result.headers.get("x-whk-voice-model"),"gemini-3.8-flash-lite-tts");
+    assert.equal(result.headers.get("x-whk-voice-fallback"),"true");
+    assert.equal(calls,4);
+    assert.deepEqual(models,["gemini-3.8-flash-tts","gemini-3.8-flash-tts",
+      "gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"]);
+  }finally{globalThis.fetch=previous}
+});
+test("production worker does not use Lite fallback for TTS access errors",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"model access restricted"}}),{status:403})};
+  try{
+    const request=new Request("https://example.test/api/tts",{method:"POST",
+      headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+      body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my"})});
+    const result=await appWorker.fetch(request,env);
+    const body=await result.json();
+    assert.equal(result.status,502);
+    assert.equal(body.provider_status,403);
+    assert.equal(calls,1);
+    assert.equal(body.fallback_used,false);
+  }finally{globalThis.fetch=previous}
+});
 test("production worker surfaces Gemini TTS free-tier quota without retrying",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"quota"}}),{status:429});

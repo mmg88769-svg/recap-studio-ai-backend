@@ -7,7 +7,7 @@ This branch adds protected, isolated prototype routes to the existing Worker. Th
 - `GET /health` — staging version and boolean secret-readiness status
 - `POST /api/transcribe-audio` — short AAC/MP4 audio clip transcription with clip-relative timestamps
 - `POST /api/analyze-evidence` — chronological Burmese recap from timestamped transcript segments and up to eight sampled JPEG frames
-- `POST /api/tts` — Burmese narrator WAV using Gemini 3.8 Flash TTS (Free Tier)
+- `POST /api/tts` — Burmese narrator WAV using Gemini 3.8 Flash TTS (Free Tier), with Free Tier Flash-Lite TTS fallback on persistent HTTP 503
 - Existing `/api/generate`, `/api/tts`, and `/api/translate` routes remain in `worker.js`
 
 The prototype uses **Gemini 3.8 Flash** for audio transcription and transcript-plus-frame recap analysis, and **Gemini 3.8 Flash TTS** for Burmese narration. Gemini 2.5 Flash access is restricted to existing users who actively used it in the past, so new projects should migrate. Google currently lists Gemini 3.8 Flash and Gemini 3.8 Flash TTS with Free Tier access; quota/rate limits still apply. No paid billing is enabled or required by this code. Transient provider 5xx/network failures are retried up to three attempts with short backoff; If Gemini 3.8 Flash remains overloaded (HTTP 503) after up to three attempts, audio transcription and evidence-based recap make one fallback attempt using free-tier multimodal Gemini 3.5 Flash-Lite. Responses report the actual model and fallback_used. Free Tier 429 quota responses are returned without retries or model fallback to avoid wasting quota. Fallback output quality and availability are not guaranteed.
