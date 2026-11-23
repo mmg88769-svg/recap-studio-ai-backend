@@ -157,7 +157,6 @@ export default {
         const result = await gemini(env, textModel, {
           contents: [{parts: [{text: prompt}]}],
           generationConfig: {
-            temperature: 0.2,
             maxOutputTokens: 8192
           }
         });
@@ -276,7 +275,6 @@ export default {
       const result = await gemini(env, textModel, {
         contents: [{parts: [{text: prompt}]}],
         generationConfig: {
-          temperature: 0.4,
           maxOutputTokens: 8192
         }
       });
