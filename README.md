@@ -7,9 +7,10 @@ This branch adds protected, isolated prototype routes to the existing Worker. Th
 - `GET /health` — staging version and boolean secret-readiness status
 - `POST /api/transcribe-audio` — short AAC/MP4 audio clip transcription with clip-relative timestamps
 - `POST /api/analyze-evidence` — chronological Burmese recap from timestamped transcript segments and up to eight sampled JPEG frames
+- `POST /api/tts` — Burmese narrator WAV using Gemini 3.8 Flash TTS (Free Tier)
 - Existing `/api/generate`, `/api/tts`, and `/api/translate` routes remain in `worker.js`
 
-The prototype uses **Gemini 2.5 Flash** for analysis to avoid the previously rate-limited preview model. No paid billing is enabled or required by this code. Free-tier quotas still apply; requests return a retryable 429 when quota/rate limits are reached.
+The prototype uses **Gemini 2.5 Flash** for analysis/transcription to avoid the previously rate-limited preview model, and **Gemini 3.8 Flash TTS** for Burmese narration. Google currently lists both standard models as Free Tier; quota/rate limits still apply. No paid billing is enabled or required by this code. Free-tier quotas still apply; requests return a retryable 429 when quota/rate limits are reached.
 
 ## Staging deployment
 
