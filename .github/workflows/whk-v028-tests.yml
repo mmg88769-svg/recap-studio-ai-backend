@@ -25,3 +25,6 @@ jobs:
 
       - name: Validate scene planning and evidence
         run: python3 -m unittest discover -s tests -p 'test_plan_scenes.py'
+
+      - name: Validate real scene-cut and narration MP4 render
+        run: python3 -m unittest discover -s tests -p 'test_render_recap.py'
