@@ -43,12 +43,15 @@ def render(video,voice,plan,output):
         manifest.write_text("".join("file '"+str(p)+"'\n" for p in paths))
         joined=folder/"joined.mp4"
         run("ffmpeg","-nostdin","-v","error","-y","-f","concat","-safe","0","-i",manifest,"-c","copy",joined)
+        staged=folder/"staged_output.mp4"
         run("ffmpeg","-nostdin","-v","error","-y","-i",joined,"-i",voice,
             "-filter_complex","[1:a:0]apad[a]","-map","0:v:0","-map","[a]",
             "-c:v","copy","-c:a","aac","-b:a","160k","-t",f"{total/1000:.3f}",
-            "-movflags","+faststart",output)
-    streams={s["codec_type"] for s in probe(output)["streams"]}
-    if not {"video","audio"}.issubset(streams): raise RuntimeError("MP4 missing audio or video")
+            "-movflags","+faststart",staged)
+        streams={s["codec_type"] for s in probe(staged)["streams"]}
+        if not {"video","audio"}.issubset(streams): raise RuntimeError("MP4 missing audio or video")
+        if staged.stat().st_size < 1024: raise RuntimeError("MP4 output too small")
+        staged.replace(output)
     return {"output":str(output),"scene_count":len(cuts),"duration_ms":total}
 
 if __name__=="__main__":
