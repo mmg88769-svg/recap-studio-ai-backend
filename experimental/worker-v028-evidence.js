@@ -38,6 +38,7 @@ export default {
       "Transcript is audio/dialogue evidence. Frames are sparse visual evidence, not the whole movie.",
       "Never invent unseen plot details. Identify ambiguous events as uncertain.",
       "Avoid frame-by-frame captions; write natural connected storytelling.",
+      "Keep narration suitable for a 60–90 second voiceover and at most 3500 Unicode characters.",
       "Return JSON with keys narration_my (string), events (array of {start_ms,end_ms,summary_my,evidence}), uncertainties (array of strings).",
       "Use event timestamps supported by the supplied evidence.",
       "Timestamped transcript:\n"+transcript
@@ -62,7 +63,7 @@ export default {
     if(!raw)return reply({error:"No recap generated"},502);
     try{
       const result=JSON.parse(raw);
-      if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>20000||!Array.isArray(result.events)||result.events.length>500||!Array.isArray(result.uncertainties)||result.uncertainties.length>100)throw Error("shape");
+      if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>3500||!Array.isArray(result.events)||result.events.length>500||!Array.isArray(result.uncertainties)||result.uncertainties.length>100)throw Error("shape");
       if(result.uncertainties.some(x=>typeof x!=="string"||x.length>1000))throw Error("uncertainty");
       const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
       let previousStart=-1;
