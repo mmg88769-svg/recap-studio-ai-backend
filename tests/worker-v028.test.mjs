@@ -1,0 +1,25 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import worker from "../experimental/worker-v028-evidence.js";
+const url="https://example.test/api/analyze-evidence";
+const env={APP_TOKEN:"test-token",GEMINI_API_KEY:"test-key"};
+const valid={transcript_segments:[{start_ms:0,end_ms:3000,text:"He entered the room and asked for help."}]};
+const post=(data,token="test-token")=>new Request(url,{method:"POST",headers:{"authorization":"Bearer "+token,"content-type":"application/json"},body:JSON.stringify(data)});
+test("rejects missing authorization before parsing",async()=>{const r=await worker.fetch(post(valid,"bad"),env);assert.equal(r.status,401)});
+test("rejects missing transcript",async()=>{const r=await worker.fetch(post({transcript_segments:[]}),env);assert.equal(r.status,400)});
+test("rejects invalid timestamps",async()=>{const r=await worker.fetch(post({transcript_segments:[{start_ms:4,end_ms:2,text:"a"}]}),env);assert.equal(r.status,400)});
+test("rejects more than eight frames",async()=>{const r=await worker.fetch(post({...valid,frames:Array.from({length:9},(_,i)=>({time_ms:i,jpeg_base64:"YWJj"}))}),env);assert.equal(r.status,400)});
+test("returns 429 without pretending success",async()=>{
+  const previous=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"quota"}}),{status:429});
+  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true)}finally{globalThis.fetch=previous}
+});
+test("returns structured grounded recap",async()=>{
+  const previous=globalThis.fetch;let payload;
+  globalThis.fetch=async(_url,opts)=>{payload=JSON.parse(opts.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  try{
+    const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);
+    const body=await r.json();assert.equal(body.mode,"transcript-plus-sampled-frames");
+    assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
+    assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+  }finally{globalThis.fetch=previous}
+});
