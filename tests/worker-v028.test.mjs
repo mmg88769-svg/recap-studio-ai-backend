@@ -34,6 +34,7 @@ test("surfaces safe Gemini provider diagnostics on model-access failures",async(
   try{
     const r=await worker.fetch(post(valid),env);assert.equal(r.status,502);
     const body=await r.json();assert.equal(body.provider_status,403);
+    assert.match(body.error,/HTTP 403/);
     assert.match(body.detail,/restricted/);
     assert.equal(body.model,"gemini-3.8-flash");
   }finally{globalThis.fetch=previous}
