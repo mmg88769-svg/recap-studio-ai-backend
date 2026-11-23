@@ -1,6 +1,6 @@
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
-const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8;
+const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 function validate(input){
   if(!input || typeof input!=="object")return "JSON object required";
@@ -51,13 +51,18 @@ export default {
     }
     let response;
     try{
-      response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",{
+      response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent",{
         method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
         body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{temperature:0.2,responseMimeType:"application/json",maxOutputTokens:8192}})
       });
     }catch{return reply({error:"AI provider temporarily unreachable",retryable:true},503);}
     if(response.status===429)return reply({error:"AI free-tier quota/rate limit",retryable:true,retry_after_seconds:60},429);
-    if(!response.ok)return reply({error:"AI provider request failed",provider_status:response.status,retryable:response.status>=500},502);
+    if(!response.ok){
+      let provider={};try{provider=await response.json()}catch{}
+      const detail=String(provider?.error?.message||"").slice(0,240);
+      return reply({error:"AI provider request failed",provider_status:response.status,
+        model:MODEL,detail,retryable:response.status>=500},502);
+    }
     let data;
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}
     const raw=(data?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
@@ -72,7 +77,7 @@ export default {
         if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms)||event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime||event.start_ms<previousStart||typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000||!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))throw Error("event");
         previousStart=event.start_ms;
       }
-      return reply({version:"0.28-prototype",mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
+      return reply({version:"0.28-prototype",model:MODEL,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
     }catch{return reply({error:"AI returned invalid recap structure"},502);}
   }
 };
