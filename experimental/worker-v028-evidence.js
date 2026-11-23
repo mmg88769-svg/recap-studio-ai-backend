@@ -1,7 +1,7 @@
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=50000, MAX_FRAMES=8;
-const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","access-control-allow-origin":"*"}});
+const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 function validate(input){
   if(!input || typeof input!=="object")return "JSON object required";
   if(!Array.isArray(input.transcript_segments)||input.transcript_segments.length<1||input.transcript_segments.length>500)return "1-500 transcript_segments required";
@@ -14,7 +14,7 @@ function validate(input){
   if(input.frames!==undefined){
     if(!Array.isArray(input.frames)||input.frames.length>MAX_FRAMES)return "Maximum eight sampled frames";
     for(const f of input.frames){
-      if(!Number.isFinite(f.time_ms)||f.time_ms<0||typeof f.jpeg_base64!=="string"||f.jpeg_base64.length>450000||!/^[A-Za-z0-9+/]+={0,2}$/.test(f.jpeg_base64))return "Invalid JPEG frame";
+      if(!Number.isFinite(f.time_ms)||f.time_ms<0||typeof f.jpeg_base64!=="string"||f.jpeg_base64.length>450000||f.jpeg_base64.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(f.jpeg_base64))return "Invalid JPEG frame";
     }
   }
   return null;
