@@ -1,0 +1,50 @@
+name: Validate W.H.K Backend (no deployment)
+
+on:
+  push:
+    branches:
+      - feature/whk-video-analysis-v07
+  pull_request:
+    paths:
+      - worker.js
+      - .github/workflows/validate-whk-backend.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify JavaScript syntax
+        run: node --check worker.js
+      - name: Validate API contracts without provider calls
+        run: |
+          node --input-type=module <<'EOF'
+          import assert from 'node:assert/strict';
+          import worker from './worker.js';
+          const env = {GEMINI_API_KEY:'placeholder',APP_TOKEN:'test-token'};
+          const url = 'https://example.invalid';
+          const post = async (route, payload, auth='Bearer test-token') =>
+            worker.fetch(new Request(url+route,{
+              method:'POST',headers:{'Content-Type':'application/json','Authorization':auth},
+              body:JSON.stringify(payload)
+            }),env);
+          const check = async (route,payload,status) => {
+            const response = await post(route,payload);
+            assert.equal(response.status,status,route);
+            assert.equal(response.headers.get('Cache-Control'),'no-store');
+          };
+          const health = await worker.fetch(new Request(url),env);
+          assert.equal((await health.json()).version,'0.7');
+          assert.equal((await post('/api/upload-session',{size_bytes:5,mime_type:'video/mp4'},'Bearer wrong')).status,401);
+          await check('/api/upload-session',{size_bytes:0,mime_type:'video/mp4'},400);
+          await check('/api/upload-session',{size_bytes:5,mime_type:'text/plain'},400);
+          await check('/api/video-status',{file_name:'../../invalid'},400);
+          await check('/api/analyze-long-video',{file_uri:'https://evil.invalid/file',mime_type:'video/mp4'},400);
+          await check('/api/analyze-long-video',{file_uri:'https://generativelanguage.googleapis.com/file',mime_type:'text/plain'},400);
+          await check('/api/tts',{text:'a'},400);
+          console.log('Backend route validation passed');
+          EOF

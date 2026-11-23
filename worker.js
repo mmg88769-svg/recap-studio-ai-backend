@@ -1,5 +1,5 @@
 
-// Recap Studio AI v0.6
+// Recap Studio AI v0.7
 // Keep API keys only in Cloudflare Secrets.
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -74,16 +74,19 @@ export default {
       return json({
         status: "online",
         service: "Recap Studio AI Backend",
-        version: "0.6"
+        version: "0.7"
       });
     }
 
     const tts = url.pathname === "/api/tts";
     const translate = url.pathname === "/api/translate";
+    const uploadSession = url.pathname === "/api/upload-session";
+    const videoStatus = url.pathname === "/api/video-status";
+    const analyzeVideo = url.pathname === "/api/analyze-long-video";
 
     if (
       request.method !== "POST" ||
-      (!tts && !translate && !scriptPaths.has(url.pathname))
+      (!tts && !translate && !uploadSession && !videoStatus && !analyzeVideo && !scriptPaths.has(url.pathname))
     ) {
       return json({error: "Not found"}, 404);
     }
@@ -111,6 +114,48 @@ export default {
       input = JSON.parse(body);
     } catch {
       return json({error: "Invalid JSON"}, 400);
+    }
+
+    if (uploadSession) {
+      const size = Number(input?.size_bytes), mime = input?.mime_type;
+      if (!Number.isSafeInteger(size) || size < 1 || size > 500000000) return json({error:"Video size must be 1 byte to 500 MB"},400);
+      if (!["video/mp4","video/quicktime"].includes(mime)) return json({error:"Unsupported video MIME type"},400);
+      try {
+        const start = await fetch("https://generativelanguage.googleapis.com/upload/v1beta/files", {
+          method:"POST",
+          headers:{"x-goog-api-key":env.GEMINI_API_KEY,"X-Goog-Upload-Protocol":"resumable","X-Goog-Upload-Command":"start","X-Goog-Upload-Header-Content-Length":String(size),"X-Goog-Upload-Header-Content-Type":mime,"Content-Type":"application/json"},
+          body:JSON.stringify({file:{display_name:"WHK_MovieRecap_"+Date.now()}})
+        });
+        if (!start.ok) return json({error:"Gemini upload session failed",detail:(await start.text()).slice(0,300)},502);
+        const uploadUrl = start.headers.get("x-goog-upload-url");
+        if (!uploadUrl || !uploadUrl.startsWith("https://generativelanguage.googleapis.com/")) return json({error:"Gemini did not return a valid upload URL"},502);
+        return json({upload_url:uploadUrl});
+      } catch { return json({error:"Could not create Gemini upload session"},502); }
+    }
+
+    if (videoStatus) {
+      const name = typeof input?.file_name === "string" ? input.file_name : "";
+      if (!/^files\/[A-Za-z0-9_-]+$/.test(name)) return json({error:"Invalid Gemini file name"},400);
+      try {
+        const r = await fetch("https://generativelanguage.googleapis.com/v1beta/"+name,{headers:{"x-goog-api-key":env.GEMINI_API_KEY}});
+        const data = await r.json();
+        if (!r.ok) return json({error:"Gemini file status failed",detail:data?.error?.message?.slice(0,250)},502);
+        return json({state:data.state || "PROCESSING",file_uri:data.uri || "",error:data.error?.message || ""});
+      } catch { return json({error:"Could not check Gemini video status"},502); }
+    }
+
+    if (analyzeVideo) {
+      const fileUri = typeof input?.file_uri === "string" ? input.file_uri : "";
+      const mime = input?.mime_type;
+      const language = languageNames[input?.language] ? input.language : "my";
+      if (!fileUri.startsWith("https://generativelanguage.googleapis.com/") || !["video/mp4","video/quicktime"].includes(mime)) return json({error:"Invalid Gemini video reference or MIME type"},400);
+      const prompt = `Analyze the complete supplied movie video, including visible scenes, actions, chronology, character relationships and intelligible dialogue. Write an engaging, natural ${languageNames[language]} movie recap in chronological order. Use connected storytelling, not a shot list or report. Only describe events supported by the video; do not invent names, motives, dialogue or scenes. Return only the narration script.`;
+      try {
+        const result = await gemini(env,textModel,{contents:[{parts:[{fileData:{mimeType:mime,fileUri}},{text:prompt}]}],generationConfig:{temperature:0.35,maxOutputTokens:12000}});
+        if (result.error) return json({error:"Video analysis failed",status:result.status,detail:result.error},502);
+        const script = outputText(result.data);
+        return script ? json({script}) : json({error:"No recap script generated"},502);
+      } catch { return json({error:"Video analysis request failed"},502); }
     }
 
     if (translate) {
