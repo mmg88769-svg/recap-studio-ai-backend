@@ -2,6 +2,7 @@
 // Short audio clips only. No persistent storage. Never put API keys in the app.
 const MAX_BASE64=2_800_000;
 const MODEL="gemini-3.8-flash";
+const FALLBACK_MODEL="gemini-3.5-flash-lite";
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const MIME=new Set(["audio/wav","audio/x-wav","audio/mpeg","audio/mp3","audio/mp4","audio/aac","audio/ogg","audio/webm"]);
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
@@ -35,7 +36,7 @@ export default {
   catch{return json({error:"Invalid JSON"},400)}
   if(!input||!MIME.has(input.mime_type)||typeof input.audio_base64!=="string"||input.audio_base64.length===0||input.audio_base64.length>MAX_BASE64||input.audio_base64.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio_base64))return json({error:"Invalid audio payload"},400);
   const instruction="Transcribe the spoken dialogue of this short audio clip in its original language. Include accurate clip-relative millisecond timestamps for each spoken segment. Do not invent speech. For non-speech clips, return an empty segments array. Output JSON object with segments array of {start_ms,end_ms,text,language} and uncertainties array of strings.";
-  let response, attempts = 0;
+  let response, attempts = 0, activeModel = MODEL, fallback_used = false;
   try{
    const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
     method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
@@ -44,12 +45,23 @@ export default {
    response=result.response;
    attempts=result.attempts;
   }catch{return json({error:"AI provider unreachable after three attempts",retryable:true,attempts:3,retry_after_seconds:15},503)}
+  // A persistent Gemini 3.8 503 is overload, not a quota/authentication error.
+  // Try the official Free Tier multimodal Lite model only after primary retries fail.
+  if(response.status===503){
+   try{
+    response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL}:generateContent`,{
+     method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+     body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
+    });
+    attempts++;activeModel=FALLBACK_MODEL;fallback_used=true;
+   }catch{return json({error:"Both AI models temporarily unreachable",retryable:true,model:FALLBACK_MODEL,attempts,retry_after_seconds:60},503)}
+  }
   if(response.status===429)return json({error:"AI quota exceeded",retryable:true,retry_after_seconds:60,attempts},429);
   if(!response.ok){
    let provider={};try{provider=await response.json()}catch{}
    const detail=String(provider?.error?.message||"").slice(0,240);
    return json({error:"AI provider failed (HTTP "+response.status+"): "+(detail||"Provider error"),
-    provider_status:response.status,model:MODEL,detail,retryable:response.status>=500,attempts},502);
+    provider_status:response.status,model:activeModel,fallback_used,detail,retryable:response.status>=500,attempts},502);
   }
   let body;try{body=await response.json()}catch{return json({error:"Invalid AI response"},502)}
   const text=(body?.candidates?.[0]?.content?.parts||[]).map(x=>x.text||"").join("").trim();
@@ -59,7 +71,7 @@ export default {
    for(const s of parsed.segments){
     if(!Number.isFinite(s.start_ms)||!Number.isFinite(s.end_ms)||s.start_ms<0||s.end_ms<=s.start_ms||typeof s.text!=="string"||typeof s.language!=="string")throw Error("segment");
    }
-   return json({version:"0.28-prototype",model:MODEL,timestamp_basis:"clip-relative",transcript_segments:parsed.segments,uncertainties:parsed.uncertainties});
+   return json({version:"0.28-prototype",model:activeModel,fallback_used,timestamp_basis:"clip-relative",transcript_segments:parsed.segments,uncertainties:parsed.uncertainties});
   }catch{return json({error:"Invalid transcription structure"},502)}
  }
 };

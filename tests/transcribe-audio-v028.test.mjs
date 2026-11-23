@@ -19,7 +19,7 @@ test("retries transient Gemini 503 overload and succeeds",async()=>{
 });
 test("stops after three transient provider failures and marks them retryable",async()=>{
  const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
- try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,3);assert.equal(body.attempts,3);assert.equal(body.retryable,true);assert.equal(body.provider_status,503)}finally{globalThis.fetch=old}
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,4);assert.equal(body.attempts,4);assert.equal(body.retryable,true);assert.equal(body.provider_status,503);assert.equal(body.model,"gemini-3.5-flash-lite")}finally{globalThis.fetch=old}
 });
 test("accepts timestamped transcription using Gemini 3.8 Flash",async()=>{
  const old=globalThis.fetch;let target;
@@ -33,4 +33,10 @@ test("surfaces provider status and safe detail on access errors",async()=>{
 test("rejects malformed provider timestamps",async()=>{
  const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:1200,end_ms:100,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
  try{assert.equal((await worker.fetch(req(),env)).status,502)}finally{globalThis.fetch=old}
+});
+
+test("uses Lite model for transcription after sustained primary 503",async()=>{
+ const old=globalThis.fetch;let calls=0;const urls=[];
+ globalThis.fetch=async url=>{calls++;urls.push(url);return calls<=3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200})};
+ try{const r=await worker.fetch(req(),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,4);assert.equal(j.model,"gemini-3.5-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
 });

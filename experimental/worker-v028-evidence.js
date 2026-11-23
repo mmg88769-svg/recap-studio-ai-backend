@@ -1,6 +1,7 @@
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
+const FALLBACK_MODEL="gemini-3.5-flash-lite";
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -68,7 +69,7 @@ export default {
       parts.push({text:`Sampled frame at ${frame.time_ms} ms (visual context only):`});
       parts.push({inline_data:{mime_type:"image/jpeg",data:frame.jpeg_base64}});
     }
-    let response, attempts = 0;
+    let response, attempts = 0, activeModel = MODEL, fallback_used = false;
     try{
       const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
         method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
@@ -77,12 +78,22 @@ export default {
       response=result.response;
       attempts=result.attempts;
     }catch{return reply({error:"AI provider temporarily unreachable after three attempts",retryable:true,attempts:3,retry_after_seconds:15},503);}
+    // Only HTTP 503 overload can trigger this free-tier backup model.
+    if(response.status===503){
+      try{
+        response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL}:generateContent`,{
+          method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+          body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
+        });
+        attempts++;activeModel=FALLBACK_MODEL;fallback_used=true;
+      }catch{return reply({error:"Both AI models temporarily unreachable",retryable:true,model:FALLBACK_MODEL,attempts,retry_after_seconds:60},503);}
+    }
     if(response.status===429)return reply({error:"AI free-tier quota/rate limit",retryable:true,retry_after_seconds:60,attempts},429);
     if(!response.ok){
       let provider={};try{provider=await response.json()}catch{}
       const detail=String(provider?.error?.message||"").slice(0,240);
       return reply({error:"AI provider request failed (HTTP "+response.status+"): "+(detail||"Provider error"),
-        provider_status:response.status,model:MODEL,detail,retryable:response.status>=500,attempts},502);
+        provider_status:response.status,model:activeModel,fallback_used,detail,retryable:response.status>=500,attempts},502);
     }
     let data;
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}
@@ -98,7 +109,7 @@ export default {
         if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms)||event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime||event.start_ms<previousStart||typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000||!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))throw Error("event");
         previousStart=event.start_ms;
       }
-      return reply({version:"0.28-prototype",model:MODEL,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
+      return reply({version:"0.28-prototype",model:activeModel,fallback_used,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
     }catch{return reply({error:"AI returned invalid recap structure"},502);}
   }
 };

@@ -21,7 +21,7 @@ test("retries transient Gemini 503 evidence overload and succeeds",async()=>{
 });
 test("reports the final retry count after repeated Gemini 503 evidence failures",async()=>{
   const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
-  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,3);assert.equal(body.attempts,3);assert.equal(body.retryable,true);assert.equal(body.provider_status,503)}finally{globalThis.fetch=previous}
+  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,4);assert.equal(body.attempts,4);assert.equal(body.retryable,true);assert.equal(body.provider_status,503);assert.equal(body.model,"gemini-3.5-flash-lite")}finally{globalThis.fetch=previous}
 });
 test("returns structured grounded recap",async()=>{
   const previous=globalThis.fetch;let payload,providerUrl;
@@ -134,4 +134,10 @@ test("production worker surfaces Gemini TTS free-tier quota without retrying",as
     assert.equal(response.status,429);
     assert.equal((await response.json()).retryable,true);
   }finally{globalThis.fetch=previous}
+});
+
+test("uses Lite for timestamped transcript plus frames after primary 503",async()=>{
+ const old=globalThis.fetch;let calls=0;const urls=[];
+ globalThis.fetch=async url=>{calls++;urls.push(url);return calls<=3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+ try{const r=await worker.fetch(post(valid),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,4);assert.equal(j.model,"gemini-3.5-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
 });
