@@ -96,7 +96,7 @@ test("production worker generates Burmese WAV through Free Tier Gemini TTS",asyn
       body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my",gender:"male",style:"cinematic"})
     });
     const response=await appWorker.fetch(request,env);
-    assert.equal(response.status,200);
+    assert.equal(response.status,200,await response.clone().text());
     assert.equal(response.headers.get("content-type"),"audio/wav");
     assert.equal(target,"https://generativelanguage.googleapis.com/v1beta/interactions");
     assert.equal(payload.model,"gemini-3.8-flash-tts");
