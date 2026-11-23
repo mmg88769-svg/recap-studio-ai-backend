@@ -20,7 +20,7 @@ export default {
   try{
    response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
     method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
-    body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",temperature:0,maxOutputTokens:8192}})
+    body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
    });
   }catch{return json({error:"AI provider unreachable",retryable:true},503)}
   if(response.status===429)return json({error:"AI quota exceeded",retryable:true,retry_after_seconds:60},429);
