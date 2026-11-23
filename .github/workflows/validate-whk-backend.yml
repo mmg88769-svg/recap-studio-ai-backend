@@ -21,7 +21,8 @@ jobs:
       - name: Verify JavaScript syntax
         run: node --check worker.js
       - name: Validate API contracts without provider calls
-        run: node --input-type=module <<'EOF'
+        run: |
+          node --input-type=module <<'EOF'
           import assert from 'node:assert/strict';
           import worker from './worker.js';
           const env = {GEMINI_API_KEY:'placeholder',APP_TOKEN:'test-token'};
