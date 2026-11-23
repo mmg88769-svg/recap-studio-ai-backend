@@ -22,3 +22,6 @@ jobs:
 
       - name: Validate movie timeline transcript merge
         run: python3 -m unittest discover -s tests -p 'test_merge_transcripts.py'
+
+      - name: Validate scene planning and evidence
+        run: python3 -m unittest discover -s tests -p 'test_plan_scenes.py'
