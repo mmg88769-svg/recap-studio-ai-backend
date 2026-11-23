@@ -1,0 +1,24 @@
+name: Validate WHK test Worker (no deployment)
+
+on:
+  push:
+    branches:
+      - feature/whk-quota-safe-model-test
+  workflow_dispatch:
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Cloudflare worker JavaScript
+        run: node --check worker.js
+      - name: Check video upload and analysis routes remain in source
+        run: |
+          grep -q '/api/upload-session' worker.js
+          grep -q '/api/video-status' worker.js
+          grep -q '/api/analyze-long-video' worker.js
+          grep -q '/api/tts' worker.js
+          grep -q 'gemini-2.5-flash' worker.js
