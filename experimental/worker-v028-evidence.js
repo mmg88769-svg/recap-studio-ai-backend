@@ -61,24 +61,24 @@ function validateRecapStructure(result,input){
   if(!Array.isArray(result.uncertainties)||result.uncertainties.length>100)return "uncertainties must be an array with at most 100 strings";
   for(let i=0;i<result.uncertainties.length;i++)
     if(typeof result.uncertainties[i]!=="string"||result.uncertainties[i].length>1000)
-      return \`uncertainties[\${i}] must be a string of at most 1000 characters\`;
+      return "uncertainties["+i+"] must be a string of at most 1000 characters";
   const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
   let previousStart=-1;
   for(let i=0;i<result.events.length;i++){
     const event=result.events[i];
     if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms))
-      return \`events[\${i}].start_ms and end_ms must be integer milliseconds\`;
+      return "events["+i+"].start_ms and end_ms must be integer milliseconds";
     if(event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime)
-      return \`events[\${i}] timestamp is outside the supplied evidence timeline\`;
-    if(event.start_ms<previousStart)return \`events[\${i}] is not in chronological order\`;
+      return "events["+i+"] timestamp is outside the supplied evidence timeline";
+    if(event.start_ms<previousStart)return "events["+i+"] is not in chronological order";
     if(typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000)
-      return \`events[\${i}].summary_my must be a non-empty string of at most 3000 characters\`;
+      return "events["+i+"].summary_my must be a non-empty string of at most 3000 characters";
     if(!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||
       event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))
-      return \`events[\${i}].evidence must contain 1-20 non-empty evidence strings\`;
+      return "events["+i+"].evidence must contain 1-20 non-empty evidence strings";
     const grounded=groundedEvidenceForEvent(event,input);
     if(grounded.length===0)
-      return \`events[\${i}].evidence must cite an exact transcript quote with DIALOGUE: or a supplied frame timestamp with FRAME@...ms\`;
+      return "events["+i+"] timestamp is outside the supplied evidence timeline";
     // Drop unsupported citations when at least one valid source citation remains.
     event.evidence=grounded;
     previousStart=event.start_ms;
