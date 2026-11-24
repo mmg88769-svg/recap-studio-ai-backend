@@ -437,17 +437,25 @@ test("rejects narration longer than the Android voice input limit",async()=>{
 
 test("supports visual-only recap when no speech transcript is available",async()=>{
   const previous=globalThis.fetch;let prompt="";
+  const visualRecap=emptyRecap("မြင်ရသောအဖြစ်အပျက်",[{
+    start_ms:1000,end_ms:2000,summary_my:"မြင်ကွင်းတွင် လူတစ်ဦး လမ်းလျှောက်နေသည်",
+    cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],
+    evidence:["Sampled frame at 1000 ms","Sampled frame at 2000 ms"]
+  }]);
   globalThis.fetch=async(_url,opts)=>{
     prompt=JSON.parse(opts.body).contents[0].parts[0].text;
-    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap("မြင်ရသောအဖြစ်အပျက်"))}]}}]}),{status:200});
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(visualRecap)}]}}]}),{status:200});
   };
   try{
-    const r=await worker.fetch(post({transcript_segments:[],frames:[{time_ms:1000,jpeg_base64:"AAAA"}]}),env);
+    const r=await worker.fetch(post({transcript_segments:[],frames:[
+      {time_ms:1000,jpeg_base64:"AAAA"},{time_ms:2000,jpeg_base64:"AAAA"}
+    ]}),env);
     const body=await r.json();
     assert.equal(r.status,200);
     assert.equal(body.analysis_contract,"story-map-v1");
     assert.equal(body.evidence_mode,"visual_only");
     assert.equal(body.mode,"story-map-visual-only");
+    assert.equal(body.events.length,1);
     assert.match(prompt,/Evidence mode: visual_only/);
     assert.match(prompt,/use visual evidence only/);
   }finally{globalThis.fetch=previous}
