@@ -24,6 +24,35 @@ const RECAP_RESPONSE_SCHEMA={
   },
   required:["narration_my","events","uncertainties"]
 };
+function normalizeEvidenceText(value){
+  return String(value||"").normalize("NFKC").toLocaleLowerCase().replace(/\s+/g," ").trim();
+}
+function groundedEvidenceForEvent(event,input){
+  const grounded=[];
+  for(const raw of event.evidence){
+    const evidence=raw.trim();
+    const dialoguePrefix=evidence.match(/^DIALOGUE:\s*/i);
+    if(dialoguePrefix){
+      let quote=evidence.slice(dialoguePrefix[0].length).trim();
+      if((quote.startsWith('"')&&quote.endsWith('"'))||(quote.startsWith("“")&&quote.endsWith("”")))
+        quote=quote.slice(1,-1).trim();
+      const normalizedQuote=normalizeEvidenceText(quote);
+      if(Array.from(normalizedQuote).length>=4&&input.transcript_segments.some(segment=>
+        segment.start_ms<=event.end_ms&&segment.end_ms>=event.start_ms&&
+        normalizeEvidenceText(segment.text).includes(normalizedQuote)))
+        grounded.push(evidence);
+      continue;
+    }
+    const frameMatch=evidence.match(/^FRAME@(\d+)ms(?::\s*[\s\S]*)?$/i);
+    if(frameMatch){
+      const timeMs=Number(frameMatch[1]);
+      if((input.frames||[]).some(frame=>frame.time_ms===timeMs)&&
+        timeMs>=event.start_ms&&timeMs<=event.end_ms)
+        grounded.push(evidence);
+    }
+  }
+  return grounded;
+}
 function validateRecapStructure(result,input){
   if(!result||typeof result!=="object"||Array.isArray(result))return "response must be a JSON object";
   if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500)
@@ -32,21 +61,26 @@ function validateRecapStructure(result,input){
   if(!Array.isArray(result.uncertainties)||result.uncertainties.length>100)return "uncertainties must be an array with at most 100 strings";
   for(let i=0;i<result.uncertainties.length;i++)
     if(typeof result.uncertainties[i]!=="string"||result.uncertainties[i].length>1000)
-      return `uncertainties[${i}] must be a string of at most 1000 characters`;
+      return \`uncertainties[\${i}] must be a string of at most 1000 characters\`;
   const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
   let previousStart=-1;
   for(let i=0;i<result.events.length;i++){
     const event=result.events[i];
     if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms))
-      return `events[${i}].start_ms and end_ms must be integer milliseconds`;
+      return \`events[\${i}].start_ms and end_ms must be integer milliseconds\`;
     if(event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime)
-      return `events[${i}] timestamp is outside the supplied evidence timeline`;
-    if(event.start_ms<previousStart)return `events[${i}] is not in chronological order`;
+      return \`events[\${i}] timestamp is outside the supplied evidence timeline\`;
+    if(event.start_ms<previousStart)return \`events[\${i}] is not in chronological order\`;
     if(typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000)
-      return `events[${i}].summary_my must be a non-empty string of at most 3000 characters`;
+      return \`events[\${i}].summary_my must be a non-empty string of at most 3000 characters\`;
     if(!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||
       event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))
-      return `events[${i}].evidence must contain 1-20 non-empty evidence strings`;
+      return \`events[\${i}].evidence must contain 1-20 non-empty evidence strings\`;
+    const grounded=groundedEvidenceForEvent(event,input);
+    if(grounded.length===0)
+      return \`events[\${i}].evidence must cite an exact transcript quote with DIALOGUE: or a supplied frame timestamp with FRAME@...ms\`;
+    // Drop unsupported citations when at least one valid source citation remains.
+    event.evidence=grounded;
     previousStart=event.start_ms;
   }
   return null;
@@ -126,17 +160,26 @@ export default {
     catch{return reply({error:"Invalid JSON"},400);}
     const error=validate(input);if(error)return reply({error},400);
     const transcript=input.transcript_segments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\n");
+    const frameTimeline=(input.frames||[]).map(frame=>frame.time_ms).join(", ")||"none";
     const instructions=[
-      "Write a coherent chronological Burmese movie recap grounded ONLY in the evidence.",
-      "Transcript is audio/dialogue evidence. Frames are sparse visual evidence, not the whole movie.",
-      "Never invent unseen plot details. Identify ambiguous events as uncertain.",
-      "Avoid frame-by-frame captions; write natural connected storytelling.",
-      "Keep narration suitable for a 45–60 second voiceover and at most 2500 Unicode characters.",
-      "Return 6–16 chronological key story events when the evidence supports them; do not invent events to reach a count.",
-      "Return JSON matching the required response schema exactly; use integer milliseconds for every event start_ms and end_ms.",
-      "Every event must have a non-empty summary_my and 1-20 short evidence strings copied from the transcript or identifying a supplied sampled frame.",
-      "Keep every event timestamp within the supplied evidence timeline and order events chronologically.",
-      "If the supplied evidence cannot support an event, omit that event and explain the uncertainty instead of inventing details.",
+      "You are an expert movie-story analyst and a natural Burmese recap narrator.",
+      "Produce a coherent story recap grounded ONLY in the supplied evidence. Do not invent missing scenes, dialogue, character identities, relationships, motives, or an ending.",
+      "First organize the evidence into a compact story map: identifiable characters, supported relationships, goals, conflict, cause-and-effect, turning points, and outcome. Use only facts supported by the supplied evidence; do not output private reasoning.",
+      "Transcript segments are the available audio/dialogue evidence and include movie-relative timestamps. A transcript can contain speech-recognition errors: do not silently repair names or details unless other evidence confirms them.",
+      "Frames are sparse still images, not the whole movie. Never claim motion, an action between frames, an unseen reaction, or a continuous scene based only on a still image.",
+      "Follow the supplied movie timeline in timestamp order. If the evidence clearly shows a flashback or time jump, identify it as such; do not silently reorder events into an assumed story chronology.",
+      "Separate what is directly supported from what is uncertain. If a character, relationship, cause, or outcome is unclear, use cautious wording and add a short Burmese uncertainty note instead of guessing.",
+      "Write natural spoken Burmese for a movie recap: connected storytelling, clear transitions, consistent character references, and concise sentences. Avoid literal translation, repetitive captions, unnecessary English, and scene-by-scene image descriptions.",
+      "Do not begin with generic greetings. Focus on the story. Do not add a moral, review, rating, or ending that the evidence does not support.",
+      "Return 6-16 important chronological events only when the evidence supports that many; fewer events are better than invented events.",
+      "For EVERY event, evidence must use ONLY these exact citation formats: DIALOGUE: followed by a continuous verbatim quote copied from one supplied transcript segment; OR FRAME@<exact_time_ms>ms: followed by a brief detail visible in that exact supplied still frame.",
+      "A DIALOGUE quote must be copied exactly from the transcript, not translated or paraphrased. The quote must come from a transcript segment whose time overlaps the event start_ms/end_ms.",
+      "A FRAME citation must use one of the exact sampled frame timestamps listed here: "+frameTimeline+". Its timestamp must fall within the event start_ms/end_ms. Describe only what is visibly present in that still, not movement or unseen context.",
+      "Every event needs at least one source citation that directly supports its summary. Do not use generic evidence such as 'the scene', 'the movie', 'the character', or invented dialogue.",
+      "Keep event timestamps within the supplied evidence timeline and order events by start_ms. Use integer milliseconds.",
+      "Keep Burmese narration suitable for a 45-60 second voiceover and at most 2500 Unicode characters. Do not pad the recap to reach a target duration.",
+      "If the evidence is too thin to tell the story reliably, produce a shorter cautious narration and explain the missing evidence in uncertainties.",
+      "Return JSON matching the required response schema exactly. Do not include markdown or any text outside the JSON object.",
       "Timestamped transcript:\n"+transcript
     ].join("\n");
     const parts=[{text:instructions}];
