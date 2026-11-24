@@ -33,6 +33,9 @@ test("returns structured grounded recap",async()=>{
     assert.ok(providerUrl.includes("models/gemini-3.8-flash"));
     assert.equal(body.model,"gemini-3.8-flash");
     assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+    assert.equal(payload.generationConfig.responseMimeType,"application/json");
+    assert.deepEqual(payload.generationConfig.responseSchema.required,["narration_my","events","uncertainties"]);
+    assert.equal(payload.generationConfig.responseSchema.properties.events.items.properties.start_ms.type,"INTEGER");
   }finally{globalThis.fetch=previous}
 });
 
@@ -57,7 +60,9 @@ test("rejects AI events outside supplied evidence timeline",async()=>{
   try{
     const r=await worker.fetch(post(valid),env);
     assert.equal(r.status,502);
-    assert.match((await r.json()).error,/invalid recap structure/);
+    const body=await r.json();
+    assert.match(body.error,/invalid recap structure/);
+    assert.match(body.validation_error,/outside the supplied evidence timeline/);
   }finally{globalThis.fetch=previous}
 });
 test("rejects AI events without evidence references",async()=>{
@@ -299,4 +304,23 @@ test("evidence persistent Cloudflare 524 is reported after five bounded calls",a
  try{const r=await worker.fetch(post(valid),env);const b=await r.json();
   assert.equal(r.status,502);assert.equal(calls,5);assert.equal(b.provider_status,524);assert.equal(b.attempts,5);assert.equal(b.retryable,true);
  }finally{globalThis.fetch=previous}
+});
+
+test("reports the exact invalid recap field instead of a generic validation error",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:1000,summary_my:"Scene",evidence:[]}],uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.equal(body.validation_error,"events[0].evidence must contain 1-20 non-empty evidence strings");
+  }finally{globalThis.fetch=previous}
+});
+test("accepts valid JSON wrapped in a markdown JSON fence",async()=>{
+  const previous=globalThis.fetch;
+  const recap={narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]};
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:"```json\n"+JSON.stringify(recap)+"\n```"}]}}]}),{status:200});
+  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);assert.equal((await r.json()).narration_my,"ဇာတ်လမ်း")}
+  finally{globalThis.fetch=previous}
 });

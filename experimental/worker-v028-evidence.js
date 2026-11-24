@@ -2,6 +2,59 @@
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
 const FALLBACK_MODELS=["gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
+// Constrain Gemini to the exact JSON contract consumed by the recap pipeline.
+const RECAP_RESPONSE_SCHEMA={
+  type:"OBJECT",
+  properties:{
+    narration_my:{type:"STRING"},
+    events:{
+      type:"ARRAY",
+      items:{
+        type:"OBJECT",
+        properties:{
+          start_ms:{type:"INTEGER"},
+          end_ms:{type:"INTEGER"},
+          summary_my:{type:"STRING"},
+          evidence:{type:"ARRAY",items:{type:"STRING"}}
+        },
+        required:["start_ms","end_ms","summary_my","evidence"]
+      }
+    },
+    uncertainties:{type:"ARRAY",items:{type:"STRING"}}
+  },
+  required:["narration_my","events","uncertainties"]
+};
+function validateRecapStructure(result,input){
+  if(!result||typeof result!=="object"||Array.isArray(result))return "response must be a JSON object";
+  if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500)
+    return "narration_my must be a non-empty string of at most 2500 characters";
+  if(!Array.isArray(result.events)||result.events.length>500)return "events must be an array with at most 500 items";
+  if(!Array.isArray(result.uncertainties)||result.uncertainties.length>100)return "uncertainties must be an array with at most 100 strings";
+  for(let i=0;i<result.uncertainties.length;i++)
+    if(typeof result.uncertainties[i]!=="string"||result.uncertainties[i].length>1000)
+      return `uncertainties[${i}] must be a string of at most 1000 characters`;
+  const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
+  let previousStart=-1;
+  for(let i=0;i<result.events.length;i++){
+    const event=result.events[i];
+    if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms))
+      return `events[${i}].start_ms and end_ms must be integer milliseconds`;
+    if(event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime)
+      return `events[${i}] timestamp is outside the supplied evidence timeline`;
+    if(event.start_ms<previousStart)return `events[${i}] is not in chronological order`;
+    if(typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000)
+      return `events[${i}].summary_my must be a non-empty string of at most 3000 characters`;
+    if(!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||
+      event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))
+      return `events[${i}].evidence must contain 1-20 non-empty evidence strings`;
+    previousStart=event.start_ms;
+  }
+  return null;
+}
+function parseRecapJson(raw){
+  const clean=String(raw||"").trim().replace(/^\`\`\`(?:json)?\s*/i,"").replace(/\s*\`\`\`$/,"");
+  return JSON.parse(clean);
+}
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504,524]);
 // Cap upstream latency: at most five provider attempts, 18 seconds each.
@@ -80,8 +133,10 @@ export default {
       "Avoid frame-by-frame captions; write natural connected storytelling.",
       "Keep narration suitable for a 45–60 second voiceover and at most 2500 Unicode characters.",
       "Return 6–16 chronological key story events when the evidence supports them; do not invent events to reach a count.",
-      "Return JSON with keys narration_my (string), events (array of {start_ms,end_ms,summary_my,evidence}), uncertainties (array of strings).",
-      "Use event timestamps supported by the supplied evidence.",
+      "Return JSON matching the required response schema exactly; use integer milliseconds for every event start_ms and end_ms.",
+      "Every event must have a non-empty summary_my and 1-20 short evidence strings copied from the transcript or identifying a supplied sampled frame.",
+      "Keep every event timestamp within the supplied evidence timeline and order events chronologically.",
+      "If the supplied evidence cannot support an event, omit that event and explain the uncertainty instead of inventing details.",
       "Timestamped transcript:\n"+transcript
     ].join("\n");
     const parts=[{text:instructions}];
@@ -93,7 +148,7 @@ export default {
     try{
       const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
         method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
-        body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
+        body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",responseSchema:RECAP_RESPONSE_SCHEMA,maxOutputTokens:8192}})
       });
       response=result.response;
       attempts=result.attempts;
@@ -110,7 +165,7 @@ export default {
         const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
           method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
           headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
-          body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
+          body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",responseSchema:RECAP_RESPONSE_SCHEMA,maxOutputTokens:8192}})
         });
         response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);
       }catch{
@@ -136,17 +191,15 @@ export default {
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}
     const raw=(data?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
     if(!raw)return reply({error:"No recap generated"},502);
-    try{
-      const result=JSON.parse(raw);
-      if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500||!Array.isArray(result.events)||result.events.length>500||!Array.isArray(result.uncertainties)||result.uncertainties.length>100)throw Error("shape");
-      if(result.uncertainties.some(x=>typeof x!=="string"||x.length>1000))throw Error("uncertainty");
-      const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
-      let previousStart=-1;
-      for(const event of result.events){
-        if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms)||event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime||event.start_ms<previousStart||typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000||!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))throw Error("event");
-        previousStart=event.start_ms;
-      }
-      return reply({version:"0.28-prototype",model:activeModel,fallback_used,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
-    }catch{return reply({error:"AI returned invalid recap structure"},502);}
+    let result;
+    try{result=parseRecapJson(raw);}
+    catch{
+      return reply({error:"AI returned invalid recap structure",validation_error:"Gemini response was not valid JSON",model:activeModel,fallback_used,attempts},502);
+    }
+    const validationError=validateRecapStructure(result,input);
+    if(validationError){
+      return reply({error:"AI returned invalid recap structure",validation_error:validationError,model:activeModel,fallback_used,attempts},502);
+    }
+    return reply({version:"0.28-prototype",model:activeModel,fallback_used,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
   }
 };
