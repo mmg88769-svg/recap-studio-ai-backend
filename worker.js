@@ -164,7 +164,8 @@ export default {
         status: "online",
         version: "0.28-prototype",
         mode: "integrated-prototype",
-        capabilities: ["audio-transcription", "transcript-plus-sampled-frames"],
+        capabilities: ["audio-transcription", "transcript-plus-sampled-frames", "character-ledger", "cause-and-effect-story-map"],
+        analysis_contract: "story-map-v1",
         ai_configured: Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
       });
     }
