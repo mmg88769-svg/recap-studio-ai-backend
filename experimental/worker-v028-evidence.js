@@ -144,7 +144,14 @@ export default {
       parts.push({text:`Sampled frame at ${frame.time_ms} ms (visual context only):`});
       parts.push({inline_data:{mime_type:"image/jpeg",data:frame.jpeg_base64}});
     }
+    const providerError = error => ({
+      name: String(error?.name || "Error").slice(0, 60),
+      message: String(error?.message || "Network request failed")
+        .replace(/https?:\\/\\/[^\\s]+/g, "[upstream]")
+        .slice(0, 180)
+    });
     let response, attempts = 0, activeModel = MODEL, fallback_used = false;
+    let primary_network_error = null;
     try{
       const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
         method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
@@ -152,25 +159,31 @@ export default {
       });
       response=result.response;
       attempts=result.attempts;
-    }catch{
+    }catch(error){
       attempts=3;
-      response=new Response(JSON.stringify({error:{message:"Primary model timed out"}}),{status:504,headers:{"content-type":"application/json"}});
+      primary_network_error = providerError(error);
+      response=new Response(JSON.stringify({error:{message:`Primary model network failure (${primary_network_error.name}): ${primary_network_error.message}`}}),{status:504,headers:{"content-type":"application/json"}});
     }
-    // Model-specific 429 quota limits and transient 5xx overload can use bounded Lite fallbacks.
+    // Try each Lite fallback once after bounded primary retries. Keep the real
+    // network exception: hiding it as "temporarily unreachable" made 503s opaque.
     const fallback_models_tried=[];
+    const fallback_network_errors=[];
     for(const fallbackModel of FALLBACK_MODELS){
       if(response.status!==429&&!RETRYABLE_PROVIDER_STATUSES.has(response.status))break;
+      try{await response.body?.cancel();}catch{}
+      fallback_models_tried.push(fallbackModel);
       try{
-        try{await response.body?.cancel();}catch{}
         const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
           method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
           headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
           body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",responseSchema:RECAP_RESPONSE_SCHEMA,maxOutputTokens:8192}})
         });
-        response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);
-      }catch{
-        attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);
-        response=new Response(JSON.stringify({error:{message:"Fallback provider temporarily unreachable"}}),{status:503,headers:{"content-type":"application/json"}});
+        response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;
+      }catch(error){
+        const diagnostic=providerError(error);
+        fallback_network_errors.push({model:fallbackModel,...diagnostic});
+        attempts++;activeModel=fallbackModel;fallback_used=true;
+        response=new Response(JSON.stringify({error:{message:`Fallback model ${fallbackModel} network failure (${diagnostic.name}): ${diagnostic.message}`}}),{status:503,headers:{"content-type":"application/json"}});
       }
     }
     if(response.status===429){
@@ -179,13 +192,15 @@ export default {
       const retry_after_seconds=retryAfterSeconds(provider);
       return reply({error:"Gemini quota/rate limit reached on primary and fallback models",provider_status:429,
         model:activeModel,fallback_used,fallback_models_tried,detail,quota_violations:quotaViolations(provider),
+        primary_network_error,fallback_network_errors,
         retryable:retry_after_seconds!==null,...(retry_after_seconds!==null?{retry_after_seconds}:{}),attempts},429);
     }
     if(!response.ok){
       let provider={};try{provider=await response.json()}catch{}
       const detail=String(provider?.error?.message||"").slice(0,240);
       return reply({error:"AI provider request failed (HTTP "+response.status+"): "+(detail||"Provider error"),
-        provider_status:response.status,model:activeModel,fallback_used,detail,retryable:response.status>=500,attempts},502);
+        provider_status:response.status,model:activeModel,fallback_used,fallback_models_tried,
+        primary_network_error,fallback_network_errors,detail,retryable:response.status>=500,attempts},502);
     }
     let data;
     try{data=await response.json();}catch{return reply({error:"Invalid provider response"},502);}
@@ -194,11 +209,11 @@ export default {
     let result;
     try{result=parseRecapJson(raw);}
     catch{
-      return reply({error:"AI returned invalid recap structure",validation_error:"Gemini response was not valid JSON",model:activeModel,fallback_used,attempts},502);
+      return reply({error:"AI returned invalid recap structure: Gemini response was not valid JSON",validation_error:"Gemini response was not valid JSON",model:activeModel,fallback_used,attempts},502);
     }
     const validationError=validateRecapStructure(result,input);
     if(validationError){
-      return reply({error:"AI returned invalid recap structure",validation_error:validationError,model:activeModel,fallback_used,attempts},502);
+      return reply({error:"AI returned invalid recap structure: "+validationError,validation_error:validationError,model:activeModel,fallback_used,attempts},502);
     }
     return reply({version:"0.28-prototype",model:activeModel,fallback_used,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
   }
