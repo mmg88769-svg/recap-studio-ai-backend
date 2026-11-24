@@ -46,9 +46,9 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function retryAfterSeconds(provider) {
   const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
   const retryInfo = details.find(x => String(x?.["@type"] || "").includes("RetryInfo"));
-  const delay = String(retryInfo?.retryDelay || "").match(/(\\d+(?:\\.\\d+)?)s/i);
+  const delay = String(retryInfo?.retryDelay || "").match(/(\d+(?:\.\d+)?)s/i);
   if (delay) return Math.max(1, Math.ceil(Number(delay[1])));
-  const message = String(provider?.error?.message || "").match(/retry in\\s+(\\d+(?:\\.\\d+)?)s/i);
+  const message = String(provider?.error?.message || "").match(/retry in\s+(\d+(?:\.\d+)?)s/i);
   return message ? Math.max(1, Math.ceil(Number(message[1]))) : null;
 }
 function quotaViolations(provider) {
@@ -64,9 +64,9 @@ function quotaViolations(provider) {
 function retryAfterSeconds(provider) {
   const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
   const retryInfo = details.find(x => String(x?.["@type"] || "").includes("RetryInfo"));
-  const delay = String(retryInfo?.retryDelay || "").match(/(\\d+(?:\\.\\d+)?)s/i);
+  const delay = String(retryInfo?.retryDelay || "").match(/(\d+(?:\.\d+)?)s/i);
   if (delay) return Math.max(1, Math.ceil(Number(delay[1])));
-  const message = String(provider?.error?.message || "").match(/retry in\\s+(\\d+(?:\\.\\d+)?)s/i);
+  const message = String(provider?.error?.message || "").match(/retry in\s+(\d+(?:\.\d+)?)s/i);
   return message ? Math.max(1, Math.ceil(Number(message[1]))) : null;
 }
 function quotaViolations(provider) {
