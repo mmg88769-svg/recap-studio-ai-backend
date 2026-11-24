@@ -1,0 +1,108 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import worker from "../experimental/transcribe-audio-v028.js";
+const env={APP_TOKEN:"test-token",GEMINI_API_KEY:"test-key"};
+const payload={mime_type:"audio/wav",audio_base64:"YWJj"};
+function req(data=payload,token="test-token"){return new Request("https://example.test/api/transcribe-audio",{method:"POST",headers:{authorization:"Bearer "+token},body:JSON.stringify(data)})}
+test("requires token",async()=>assert.equal((await worker.fetch(req(payload,"invalid"),env)).status,401));
+test("rejects invalid audio",async()=>assert.equal((await worker.fetch(req({...payload,audio_base64:"not base64!"}),env)).status,400));
+test("rejects unsupported MIME",async()=>assert.equal((await worker.fetch(req({...payload,mime_type:"text/plain"}),env)).status,400));
+test("tries each model once on 429 and returns final quota diagnostics without same-model retries",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota exhausted",details:[{"@type":"type.googleapis.com/google.rpc.QuotaFailure",violations:[{quotaMetric:"generativelanguage.googleapis.com/generate_content_free_tier_requests",quotaId:"GenerateRequestsPerDayPerProjectPerModel-FreeTier",quotaDimensions:{model:"gemini-3.1-flash-lite"},quotaValue:"0"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo",retryDelay:"12s"}]}}),{status:429})};
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,429);assert.equal(calls,3);assert.equal(body.provider_status,429);assert.equal(body.model,"gemini-3.1-flash-lite");assert.equal(body.fallback_used,true);assert.equal(body.retryable,true);assert.equal(body.retry_after_seconds,12);assert.equal(body.quota_violations[0].quota_id,"GenerateRequestsPerDayPerProjectPerModel-FreeTier");assert.equal(body.fallback_models_tried.length,2)}finally{globalThis.fetch=old}
+});
+test("retries transient Gemini 503 overload and succeeds",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ const provider={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify(provider),{status:200})};
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,200);assert.equal(calls,3);assert.equal((await r.json()).transcript_segments[0].text,"Hello")}finally{globalThis.fetch=old}
+});
+test("stops after three transient provider failures and marks them retryable",async()=>{
+ const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})};
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,502);assert.equal(calls,5);assert.equal(body.attempts,5);assert.equal(body.retryable,true);assert.equal(body.provider_status,503);assert.equal(body.model,"gemini-3.1-flash-lite")}finally{globalThis.fetch=old}
+});
+test("accepts timestamped transcription using Gemini 3.8 Flash",async()=>{
+ const old=globalThis.fetch;let target;
+ globalThis.fetch=async(url)=>{target=url;return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200})};
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,200);const body=await r.json();assert.equal(body.transcript_segments[0].text,"Hello");assert.equal(body.model,"gemini-3.8-flash");assert.match(target,/models\/gemini-3\.8-flash/)}finally{globalThis.fetch=old}
+});
+test("surfaces provider status and safe detail on access errors",async()=>{
+ const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"Model access restricted"}}),{status:403});
+ try{const r=await worker.fetch(req(),env);assert.equal(r.status,502);const body=await r.json();assert.equal(body.provider_status,403);assert.match(body.error,/HTTP 403/);assert.match(body.detail,/restricted/)}finally{globalThis.fetch=old}
+});
+test("rejects malformed provider timestamps",async()=>{
+ const old=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:1200,end_ms:100,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
+ try{assert.equal((await worker.fetch(req(),env)).status,502)}finally{globalThis.fetch=old}
+});
+
+test("uses second free-tier Lite model when primary and first fallback return 503",async()=>{
+ const old=globalThis.fetch;let calls=0;const urls=[];
+ globalThis.fetch=async url=>{calls++;urls.push(url);
+  if(calls<=4)return new Response(JSON.stringify({error:{message:"high demand"}}),{status:503});
+  return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(req(),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,5);assert.equal(j.model,"gemini-3.1-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));assert.ok(urls[4].includes("gemini-3.1-flash-lite"))}finally{globalThis.fetch=old}
+});
+
+test("falls back to Gemini 3.5 Flash-Lite when primary model returns 429",async()=>{
+ const old=globalThis.fetch;let calls=0;const urls=[];
+ globalThis.fetch=async url=>{calls++;urls.push(url);
+  return calls===1?new Response(JSON.stringify({error:{message:"primary model quota"}}),{status:429}):
+   new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,200);assert.equal(calls,2);assert.equal(body.model,"gemini-3.5-flash-lite");assert.equal(body.fallback_used,true);assert.ok(urls[1].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
+});
+
+test("transcription Cloudflare 524 uses an AbortSignal and Lite model",async()=>{
+ const previous=globalThis.fetch;let calls=0;
+ const data={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1000,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async(_url,options)=>{
+  calls++;assert.ok(options.signal instanceof AbortSignal);
+  return calls<=3?new Response("Origin timeout",{status:524}):new Response(JSON.stringify(data),{status:200});
+ };
+ try{const r=await worker.fetch(req(),env);const b=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,4);assert.equal(b.model,"gemini-3.5-flash-lite");
+  assert.equal(b.transcript_segments[0].text,"Hello");
+ }finally{globalThis.fetch=previous}
+});
+
+
+test("transcription fallback preserves network diagnostics and continues to second Lite model",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ const ok={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1000,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async()=>{
+  calls++;
+  if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+  if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+  return new Response(JSON.stringify(ok),{status:200});
+ };
+ try{
+  const r=await worker.fetch(req(),env);const body=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,5);
+  assert.equal(body.model,"gemini-3.1-flash-lite");
+  assert.deepEqual(body.fallback_models_tried,["gemini-3.5-flash-lite","gemini-3.1-flash-lite"]);
+  assert.equal(body.fallback_network_errors[0].name,"NetworkError");
+  assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+ }finally{globalThis.fetch=old}
+});
+
+test("transcription returns actual final fallback timeout detail instead of generic unreachable message",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{
+  calls++;
+  if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+  if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+  throw Object.assign(new Error("The operation was aborted"),{name:"TimeoutError"});
+ };
+ try{
+  const r=await worker.fetch(req(),env);const body=await r.json();
+  assert.equal(r.status,502);assert.equal(calls,5);
+  assert.equal(body.provider_status,503);
+  assert.match(body.detail,/TimeoutError/);
+  assert.match(body.detail,/The operation was aborted/);
+  assert.equal(body.fallback_network_errors.length,2);
+  assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+  assert.equal(body.fallback_network_errors[1].name,"TimeoutError");
+ }finally{globalThis.fetch=old}
+});

@@ -1,0 +1,84 @@
+name: WHK v0.28 Prototype Tests
+on:
+  push:
+    branches: [dev/whk-recap-video-audio-v028, feat/whk-grounded-narration-v029]
+  pull_request:
+    branches: [main, dev/whk-recap-video-audio-v028]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check worker.js
+      - run: node --check experimental/worker-v028-evidence.js
+      - run: node --check experimental/transcribe-audio-v028.js
+      - run: node --test tests/worker-v028.test.mjs
+
+      - run: node --test tests/transcribe-audio-v028.test.mjs
+
+  video-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure FFmpeg for video tests
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            echo "Using preinstalled FFmpeg on GitHub runner"
+          else
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          fi
+
+      - name: Test video audio extraction and MP4 mixing
+        run: python3 tests/video_pipeline_smoke.py
+
+      - name: Test audio transcription prototype
+        run: node --test tests/transcribe-audio-v028.test.mjs
+
+      - name: Validate movie timeline transcript merge
+        run: python3 -m unittest discover -s tests -p 'test_merge_transcripts.py'
+
+      - name: Validate scene planning and evidence
+        run: python3 -m unittest discover -s tests -p 'test_plan_scenes.py'
+
+      - name: Validate real scene-cut and narration MP4 render
+        run: python3 -m unittest discover -s tests -p 'test_render_recap.py'
+
+      - name: Validate offline recap orchestration
+        run: python3 -m unittest discover -s tests -p 'test_offline_pipeline.py'
+
+
+  deploy-staging:
+    needs: test
+    if: github.ref == 'refs/heads/dev/whk-recap-video-audio-v028'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Wrangler
+        run: npm install --global wrangler@4
+      - name: Deploy isolated staging Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy --config wrangler.toml
+      - name: Verify deployed staging endpoints
+        run: |
+          set -euo pipefail
+          curl --retry 5 --retry-delay 2 --retry-connrefused -fsS https://whk-movie-recap-staging.mmg88769.workers.dev/health | tee health.json
+          grep -q '"mode":"integrated-prototype"' health.json
+          grep -q '"ai_configured":true' health.json
+          for endpoint in api/transcribe-audio api/analyze-evidence api/tts; do
+            code=$(curl -sS -o /tmp/whk-endpoint.json -w '%{http_code}' -X POST \
+              -H 'Authorization: Bearer invalid-smoke-test-token' \
+              -H 'Content-Type: application/json' \
+              --data '{}' "https://whk-movie-recap-staging.mmg88769.workers.dev/$endpoint")
+            test "$code" = "401"
+          done
