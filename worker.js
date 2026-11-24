@@ -36,6 +36,8 @@ const styles = {
 };
 
 const textModel = "gemini-3.8-flash";
+// Free-tier backups are used only when all primary attempts fail transiently.
+const fallbackTextModels = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 const voiceModel = "gemini-3.8-flash-tts";
 const fallbackVoiceModel = "gemini-3.8-flash-lite-tts";
 
@@ -59,38 +61,65 @@ async function fetchWithTransientRetry(url, options) {
 }
 
 async function gemini(env, model, payload) {
-  let response, attempts = 0;
-  try {
-    const result = await fetchWithTransientRetry(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": env.GEMINI_API_KEY
-        },
-        body: JSON.stringify(payload)
+  const providerRequest = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": env.GEMINI_API_KEY
+    },
+    body: JSON.stringify(payload)
+  };
+  const models = model === textModel ? [model, ...fallbackTextModels] : [model];
+  let response, activeModel = model, fallbackUsed = false, attempts = 0;
+
+  for (const candidate of models) {
+    if (response && !RETRYABLE_PROVIDER_STATUSES.has(response.status)) break;
+    activeModel = candidate;
+    fallbackUsed = candidate !== model;
+    try {
+      if (response) {
+        try { await response.body?.cancel(); } catch {}
       }
-    );
-    response = result.response;
-    attempts = result.attempts;
-  } catch {
-    return {error:"AI provider temporarily unavailable after three attempts",status:503,attempts:3};
+      const result = candidate === model
+        ? await fetchWithTransientRetry(
+            `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
+            providerRequest
+          )
+        : {
+            response: await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
+              providerRequest
+            ),
+            attempts: 1
+          };
+      response = result.response;
+      attempts += result.attempts;
+    } catch {
+      attempts += candidate === model ? 3 : 1;
+      // Network failures should be reported, not masked by a fake successful response.
+      if (candidate === models.at(-1)) {
+        return {error:"AI provider temporarily unreachable",status:503,
+          model:activeModel,fallback_used:fallbackUsed,attempts};
+      }
+      response = new Response(JSON.stringify({error:{message:"Provider temporarily unreachable"}}),
+        {status:503,headers:{"content-type":"application/json"}});
+    }
   }
 
   let data;
   try { data = await response.json(); }
-  catch { return {error:"Invalid AI provider response",status:502,attempts}; }
-
+  catch {
+    return {error:"Invalid AI provider response",status:502,
+      model:activeModel,fallback_used:fallbackUsed,attempts};
+  }
   if (!response.ok) {
     return {
-      error: data?.error?.message?.slice(0, 250) || "AI provider error",
+      error: String(data?.error?.message || "AI provider error").slice(0,250),
       status: response.status,
-      attempts
+      model:activeModel,fallback_used:fallbackUsed,attempts
     };
   }
-
-  return {data,attempts};
+  return {data,model:activeModel,fallback_used:fallbackUsed,attempts};
 }
 
 const outputText = (data) =>
@@ -197,7 +226,9 @@ export default {
             status: result.status,
             detail: result.error,
             attempts: result.attempts,
-            retryable: result.status >= 500
+            retryable: result.status >= 500,
+            model: result.model,
+            fallback_used: result.fallback_used
           }, 502);
         }
 
@@ -338,7 +369,9 @@ export default {
           status: result.status,
           detail: result.error,
           attempts: result.attempts,
-          retryable: result.status >= 500
+          retryable: result.status >= 500,
+          model: result.model,
+          fallback_used: result.fallback_used
         }, 502);
       }
 

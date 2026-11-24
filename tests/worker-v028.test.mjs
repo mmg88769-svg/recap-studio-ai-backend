@@ -184,3 +184,60 @@ test("uses second free-tier Lite model for transcript and frames after repeated 
  };
  try{const r=await worker.fetch(post(valid),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,5);assert.equal(j.model,"gemini-3.1-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));assert.ok(urls[4].includes("gemini-3.1-flash-lite"))}finally{globalThis.fetch=old}
 });
+
+const legacyReq = (path, data, token="test-token") =>
+  new Request("https://example.test"+path,{
+    method:"POST",headers:{"authorization":"Bearer "+token,"content-type":"application/json"},
+    body:JSON.stringify(data)
+  });
+test("legacy recap retries 503 then uses first free-tier text fallback",async()=>{
+  const previous=globalThis.fetch;let calls=0,urls=[];
+  globalThis.fetch=async url=>{
+    calls++;urls.push(url);
+    return calls<=3
+      ? new Response(JSON.stringify({error:{message:"high demand"}}),{status:503})
+      : new Response(JSON.stringify({candidates:[{content:{parts:[{text:"မြန်မာဇာတ်လမ်း အကျဉ်းချုပ်"}]}}]}),{status:200});
+  };
+  try{
+    const r=await appWorker.fetch(legacyReq("/api/recap",{transcript:"A long dialogue source text for the story."}),env);
+    const body=await r.json();
+    assert.equal(r.status,200);assert.match(body.script,/မြန်မာ/);
+    assert.equal(calls,4);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));
+  }finally{globalThis.fetch=previous}
+});
+test("legacy recap stops after first 429 and does not switch models",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota exhausted"}}),{status:429})};
+  try{
+    const r=await appWorker.fetch(legacyReq("/api/recap",{transcript:"A long dialogue source text for the story."}),env);
+    const body=await r.json();
+    assert.equal(r.status,502);assert.equal(body.status,429);
+    assert.equal(calls,1);assert.equal(body.fallback_used,false);
+  }finally{globalThis.fetch=previous}
+});
+test("legacy translation tries both free-tier fallback models after persistent overload",async()=>{
+  const previous=globalThis.fetch;let calls=0,urls=[];
+  globalThis.fetch=async url=>{
+    calls++;urls.push(url);
+    return calls<=4?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):
+      new Response(JSON.stringify({candidates:[{content:{parts:[{text:"A translation."}]}}]}),{status:200});
+  };
+  try{
+    const r=await appWorker.fetch(legacyReq("/api/translate",{text:"This is a story recap.",language:"en"}),env);
+    const body=await r.json();
+    assert.equal(r.status,200);assert.equal(body.translation,"A translation.");
+    assert.equal(calls,5);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));
+    assert.ok(urls[4].includes("gemini-3.1-flash-lite"));
+  }finally{globalThis.fetch=previous}
+});
+test("legacy text generation surfaces fallback model if all providers overloaded",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"overloaded"}}),{status:503})};
+  try{
+    const r=await appWorker.fetch(legacyReq("/api/recap",{transcript:"A long dialogue source text for the story."}),env);
+    const body=await r.json();
+    assert.equal(r.status,502);assert.equal(body.status,503);
+    assert.equal(body.model,"gemini-3.1-flash-lite");assert.equal(body.fallback_used,true);
+    assert.equal(body.attempts,5);assert.equal(calls,5);
+  }finally{globalThis.fetch=previous}
+});
