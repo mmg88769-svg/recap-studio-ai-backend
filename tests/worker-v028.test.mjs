@@ -434,3 +434,27 @@ test("rejects narration longer than the Android voice input limit",async()=>{
     assert.equal(body.validation_error,"narration_my must be a non-empty string of at most 1400 characters");
   }finally{globalThis.fetch=previous}
 });
+
+test("supports visual-only recap when no speech transcript is available",async()=>{
+  const previous=globalThis.fetch;let prompt="";
+  globalThis.fetch=async(_url,opts)=>{
+    prompt=JSON.parse(opts.body).contents[0].parts[0].text;
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap("မြင်ရသောအဖြစ်အပျက်"))}]}}]}),{status:200});
+  };
+  try{
+    const r=await worker.fetch(post({transcript_segments:[],frames:[{time_ms:1000,jpeg_base64:"AAAA"}]}),env);
+    const body=await r.json();
+    assert.equal(r.status,200);
+    assert.equal(body.analysis_contract,"story-map-v1");
+    assert.equal(body.evidence_mode,"visual_only");
+    assert.equal(body.mode,"story-map-visual-only");
+    assert.match(prompt,/Evidence mode: visual_only/);
+    assert.match(prompt,/use visual evidence only/);
+  }finally{globalThis.fetch=previous}
+});
+
+test("rejects visual-only analysis when no frames are supplied",async()=>{
+  const r=await worker.fetch(post({transcript_segments:[],frames:[]}),env);
+  assert.equal(r.status,400);
+  assert.equal((await r.json()).error,"At least one transcript segment or sampled video frame is required");
+});
