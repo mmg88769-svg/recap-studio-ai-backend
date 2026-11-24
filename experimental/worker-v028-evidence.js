@@ -3,7 +3,9 @@
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
 const FALLBACK_MODELS=["gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
-const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
+const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504,524]);
+// Cap upstream latency: at most five provider attempts, 18 seconds each.
+const PROVIDER_FETCH_TIMEOUT_MS = 18000;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function retryAfterSeconds(provider) {
   const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
@@ -27,7 +29,7 @@ async function fetchWithTransientRetry(url, options) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {...options,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)});
       if (!RETRYABLE_PROVIDER_STATUSES.has(response.status) || attempt === 3)
         return {response, attempts: attempt};
       try { await response.body?.cancel(); } catch {}
@@ -95,7 +97,10 @@ export default {
       });
       response=result.response;
       attempts=result.attempts;
-    }catch{return reply({error:"AI provider temporarily unreachable after three attempts",retryable:true,attempts:3,retry_after_seconds:15},503);}
+    }catch{
+      attempts=3;
+      response=new Response(JSON.stringify({error:{message:"Primary model timed out"}}),{status:504,headers:{"content-type":"application/json"}});
+    }
     // Model-specific 429 quota limits and transient 5xx overload can use bounded Lite fallbacks.
     const fallback_models_tried=[];
     for(const fallbackModel of FALLBACK_MODELS){
@@ -103,7 +108,8 @@ export default {
       try{
         try{await response.body?.cancel();}catch{}
         const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
-          method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+          method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
+          headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
           body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
         });
         response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);

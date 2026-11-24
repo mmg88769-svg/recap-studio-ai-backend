@@ -41,7 +41,9 @@ const fallbackTextModels = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 const voiceModel = "gemini-3.8-flash-tts";
 const fallbackVoiceModel = "gemini-3.8-flash-lite-tts";
 
-const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
+const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504,524]);
+// Cap upstream latency: at most five provider attempts, 18 seconds each.
+const PROVIDER_FETCH_TIMEOUT_MS = 18000;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function retryAfterSeconds(provider) {
   const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
@@ -66,7 +68,7 @@ async function fetchWithTransientRetry(url, options) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {...options,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)});
       if (!RETRYABLE_PROVIDER_STATUSES.has(response.status) || attempt === 3)
         return {response, attempts: attempt};
       try { await response.body?.cancel(); } catch {}
@@ -108,7 +110,7 @@ async function gemini(env, model, payload) {
         : {
             response: await fetch(
               `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
-              providerRequest
+              {...providerRequest,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)}
             ),
             attempts: 1
           };
@@ -309,12 +311,13 @@ export default {
         let attempts=primary.attempts;
         let activeModel=voiceModel;
         let fallbackUsed=false;
-        // A temporary capacity error (503) can affect one TTS model.
+        // Capacity issues, model-specific quotas or Cloudflare 524 can affect one TTS model.
         // Free-tier Lite is a compatible secondary voice model, not a paid service.
         if(response.status===429 || RETRYABLE_PROVIDER_STATUSES.has(response.status)){
           try { await response.body?.cancel(); } catch {}
           const secondary=await fetch(interactionUrl,{
-            method:"POST",headers,body:requestBody(fallbackVoiceModel)
+            method:"POST",headers,body:requestBody(fallbackVoiceModel),
+            signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)
           });
           response=secondary;
           attempts+=1;

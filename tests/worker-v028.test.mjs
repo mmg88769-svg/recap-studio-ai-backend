@@ -267,3 +267,36 @@ test("legacy recap succeeds on Lite model when primary model returns 429",async(
     assert.equal(calls,2);assert.ok(urls[1].includes("gemini-3.5-flash-lite"));
   }finally{globalThis.fetch=previous}
 });
+
+test("evidence Cloudflare 524 triggers bounded Lite fallback",async()=>{
+ const previous=globalThis.fetch;let calls=0,urls=[];
+ globalThis.fetch=async(url,options)=>{
+  calls++;urls.push(url);assert.ok(options.signal instanceof AbortSignal);
+  return calls<=3
+    ? new Response("<html>Origin timed out</html>",{status:524})
+    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(post(valid),env);const b=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,4);
+  assert.equal(b.model,"gemini-3.5-flash-lite");assert.equal(b.fallback_used,true);
+  assert.ok(urls[3].includes("gemini-3.5-flash-lite"));
+ }finally{globalThis.fetch=previous}
+});
+test("evidence primary network timeouts still allow Lite fallback",async()=>{
+ const previous=globalThis.fetch;let calls=0;
+ globalThis.fetch=async(_url,options)=>{
+  calls++;assert.ok(options.signal instanceof AbortSignal);
+  if(calls<=3)throw Object.assign(new Error("Upstream timed out"),{name:"TimeoutError"});
+  return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(post(valid),env);const b=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,4);assert.equal(b.fallback_used,true);
+ }finally{globalThis.fetch=previous}
+});
+test("evidence persistent Cloudflare 524 is reported after five bounded calls",async()=>{
+ const previous=globalThis.fetch;let calls=0;
+ globalThis.fetch=async(_url,options)=>{calls++;assert.ok(options.signal instanceof AbortSignal);return new Response("<html>524</html>",{status:524})};
+ try{const r=await worker.fetch(post(valid),env);const b=await r.json();
+  assert.equal(r.status,502);assert.equal(calls,5);assert.equal(b.provider_status,524);assert.equal(b.attempts,5);assert.equal(b.retryable,true);
+ }finally{globalThis.fetch=previous}
+});

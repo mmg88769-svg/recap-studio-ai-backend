@@ -53,3 +53,16 @@ test("falls back to Gemini 3.5 Flash-Lite when primary model returns 429",async(
  };
  try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,200);assert.equal(calls,2);assert.equal(body.model,"gemini-3.5-flash-lite");assert.equal(body.fallback_used,true);assert.ok(urls[1].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
 });
+
+test("transcription Cloudflare 524 uses an AbortSignal and Lite model",async()=>{
+ const previous=globalThis.fetch;let calls=0;
+ const data={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1000,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async(_url,options)=>{
+  calls++;assert.ok(options.signal instanceof AbortSignal);
+  return calls<=3?new Response("Origin timeout",{status:524}):new Response(JSON.stringify(data),{status:200});
+ };
+ try{const r=await worker.fetch(req(),env);const b=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,4);assert.equal(b.model,"gemini-3.5-flash-lite");
+  assert.equal(b.transcript_segments[0].text,"Hello");
+ }finally{globalThis.fetch=previous}
+});
