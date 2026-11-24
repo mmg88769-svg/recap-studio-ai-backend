@@ -162,9 +162,9 @@ export default {
     if (url.pathname === "/health" && request.method === "GET") {
       return json({
         status: "online",
-        version: "0.28-prototype",
+        version: "0.29-prototype",
         mode: "integrated-prototype",
-        capabilities: ["audio-transcription", "transcript-plus-sampled-frames", "character-ledger", "cause-and-effect-story-map"],
+        capabilities: ["audio-transcription", "transcript-plus-sampled-frames", "visual-only-recap", "character-ledger", "cause-and-effect-story-map"],
         analysis_contract: "story-map-v1",
         ai_configured: Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
       });
