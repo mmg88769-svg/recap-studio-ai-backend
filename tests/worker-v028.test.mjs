@@ -377,7 +377,7 @@ test("invalid recap error includes the exact validation failure for the Android 
   try{
     const r=await worker.fetch(post(valid),env);const body=await r.json();
     assert.equal(r.status,502);
-    assert.match(body.error,/events\\[0\\]\\.evidence must contain/);
+    assert.ok(body.error.includes("events[0].evidence must contain"));
     assert.equal(body.error, "AI returned invalid recap structure: events[0].evidence must contain 1-20 non-empty evidence strings");
   }finally{globalThis.fetch=previous}
 });
