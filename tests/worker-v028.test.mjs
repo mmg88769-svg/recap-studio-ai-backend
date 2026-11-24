@@ -82,14 +82,15 @@ test("rejects AI events without evidence references",async()=>{
   finally{globalThis.fetch=previous}
 });
 
-test("production worker exposes protected v0.28 health route",async()=>{
+test("production worker exposes protected v0.29 health route",async()=>{
   const r=await appWorker.fetch(new Request("https://example.test/health"),env);
   assert.equal(r.status,200);
   const body=await r.json();
-  assert.equal(body.version,"0.28-prototype");
+  assert.equal(body.version,"0.29-prototype");
   assert.equal(body.mode,"integrated-prototype");
   assert.ok(body.capabilities.includes("audio-transcription"));
   assert.ok(body.capabilities.includes("character-ledger"));
+  assert.ok(body.capabilities.includes("visual-only-recap"));
   assert.equal(body.analysis_contract,"story-map-v1");
   assert.equal(body.ai_configured,true);
 });
