@@ -215,6 +215,6 @@ export default {
     if(validationError){
       return reply({error:"AI returned invalid recap structure: "+validationError,validation_error:validationError,model:activeModel,fallback_used,attempts},502);
     }
-    return reply({version:"0.28-prototype",model:activeModel,fallback_used,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
+    return reply({version:"0.28-prototype",model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
   }
 };
