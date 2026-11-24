@@ -1,9 +1,9 @@
 name: WHK v0.28 Prototype Tests
 on:
   push:
-    branches: [dev/whk-recap-video-audio-v028]
+    branches: [dev/whk-recap-video-audio-v028, feat/universal-narrator-story-understanding-v029]
   pull_request:
-    branches: [main]
+    branches: [main, dev/whk-recap-video-audio-v028]
   workflow_dispatch:
 jobs:
   test:

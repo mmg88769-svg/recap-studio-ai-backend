@@ -6,6 +6,8 @@ const url="https://example.test/api/analyze-evidence";
 const env={APP_TOKEN:"test-token",GEMINI_API_KEY:"test-key"};
 const valid={transcript_segments:[{start_ms:0,end_ms:3000,text:"He entered the room and asked for help."}]};
 const post=(data,token="test-token")=>new Request(url,{method:"POST",headers:{"authorization":"Bearer "+token,"content-type":"application/json"},body:JSON.stringify(data)});
+const emptyStoryMap=()=>({characters:[],story_arc:{opening_my:"",central_conflict_my:"",turning_points:[],climax_my:"",resolution_my:""}});
+const emptyRecap=(narration="ဇာတ်လမ်း",events=[])=>({narration_my:narration,story_map:emptyStoryMap(),events,uncertainties:[]});
 test("rejects missing authorization before parsing",async()=>{const r=await worker.fetch(post(valid,"bad"),env);assert.equal(r.status,401)});
 test("rejects missing transcript",async()=>{const r=await worker.fetch(post({transcript_segments:[]}),env);assert.equal(r.status,400)});
 test("rejects invalid timestamps",async()=>{const r=await worker.fetch(post({transcript_segments:[{start_ms:4,end_ms:2,text:"a"}]}),env);assert.equal(r.status,400)});
@@ -16,7 +18,7 @@ test("tries bounded model-specific fallbacks on evidence 429 without retrying th
 });
 test("retries transient Gemini 503 evidence overload and succeeds",async()=>{
   const previous=globalThis.fetch;let calls=0;
-  globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  globalThis.fetch=async()=>{calls++;return calls<3?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200})};
   try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);assert.equal(calls,3);assert.equal((await r.json()).narration_my,"ဇာတ်လမ်း")}finally{globalThis.fetch=previous}
 });
 test("reports the final retry count after repeated Gemini 503 evidence failures",async()=>{
@@ -25,16 +27,22 @@ test("reports the final retry count after repeated Gemini 503 evidence failures"
 });
 test("returns structured grounded recap",async()=>{
   const previous=globalThis.fetch;let payload,providerUrl;
-  globalThis.fetch=async(_url,opts)=>{providerUrl=_url;payload=JSON.parse(opts.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  globalThis.fetch=async(_url,opts)=>{providerUrl=_url;payload=JSON.parse(opts.body);return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200})};
   try{
     const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);
-    const body=await r.json();assert.equal(body.mode,"transcript-plus-sampled-frames");
+    const body=await r.json();assert.equal(body.mode,"story-map-transcript-plus-sampled-frames");
+    assert.equal(body.analysis_contract,"story-map-v1");
+    assert.deepEqual(body.story_map.characters,[]);
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
     assert.ok(providerUrl.includes("models/gemini-3.8-flash"));
     assert.equal(body.model,"gemini-3.8-flash");
-    assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+    assert.match(payload.contents[0].parts[0].text,/CHARACTER LEDGER/);
+    assert.match(payload.contents[0].parts[0].text,/CAUSE AND EFFECT/);
+    assert.match(payload.contents[0].parts[0].text,/natural Myanmar storytelling/);
     assert.equal(payload.generationConfig.responseMimeType,"application/json");
-    assert.deepEqual(payload.generationConfig.responseSchema.required,["narration_my","events","uncertainties"]);
+    assert.deepEqual(payload.generationConfig.responseSchema.required,["narration_my","story_map","events","uncertainties"]);
+    assert.ok(payload.generationConfig.responseSchema.properties.story_map);
+    assert.ok(payload.generationConfig.responseSchema.properties.events.items.required.includes("character_ids"));
     assert.equal(payload.generationConfig.responseSchema.properties.events.items.properties.start_ms.type,"INTEGER");
   }finally{globalThis.fetch=previous}
 });
@@ -55,7 +63,7 @@ test("surfaces safe Gemini provider diagnostics on model-access failures",async(
 test("rejects AI events outside supplied evidence timeline",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
-    narration_my:"ဇာတ်လမ်း",events:[{start_ms:10000,end_ms:12000,summary_my:"Invented scene",evidence:["unverified"]}],uncertainties:[]
+    ...emptyRecap("ဇာတ်လမ်း",[{start_ms:10000,end_ms:12000,summary_my:"Invented scene",cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],evidence:["unverified"]}])
   })}]}}]}),{status:200});
   try{
     const r=await worker.fetch(post(valid),env);
@@ -68,19 +76,22 @@ test("rejects AI events outside supplied evidence timeline",async()=>{
 test("rejects AI events without evidence references",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
-    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:2000,summary_my:"Claim",evidence:[]}],uncertainties:[]
+    ...emptyRecap("ဇာတ်လမ်း",[{start_ms:0,end_ms:2000,summary_my:"Claim",cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],evidence:[]}])
   })}]}}]}),{status:200});
   try{assert.equal((await worker.fetch(post(valid),env)).status,502)}
   finally{globalThis.fetch=previous}
 });
 
-test("production worker exposes protected v0.28 health route",async()=>{
+test("production worker exposes protected v0.29 health route",async()=>{
   const r=await appWorker.fetch(new Request("https://example.test/health"),env);
   assert.equal(r.status,200);
   const body=await r.json();
-  assert.equal(body.version,"0.28-prototype");
+  assert.equal(body.version,"0.29-prototype");
   assert.equal(body.mode,"integrated-prototype");
   assert.ok(body.capabilities.includes("audio-transcription"));
+  assert.ok(body.capabilities.includes("character-ledger"));
+  assert.ok(body.capabilities.includes("visual-only-recap"));
+  assert.equal(body.analysis_contract,"story-map-v1");
   assert.equal(body.ai_configured,true);
 });
 test("production worker routes evidence endpoint through token guard",async()=>{
@@ -189,7 +200,7 @@ test("uses second free-tier Lite model for transcript and frames after repeated 
  const old=globalThis.fetch;let calls=0;const urls=[];
  globalThis.fetch=async url=>{calls++;urls.push(url);
   return calls<=4?new Response(JSON.stringify({error:{message:"high demand"}}),{status:503}):
-   new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+   new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200});
  };
  try{const r=await worker.fetch(post(valid),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,5);assert.equal(j.model,"gemini-3.1-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));assert.ok(urls[4].includes("gemini-3.1-flash-lite"))}finally{globalThis.fetch=old}
 });
@@ -256,7 +267,7 @@ test("evidence analysis succeeds on Lite fallback when primary model has 429 quo
   const previous=globalThis.fetch;let calls=0;
   globalThis.fetch=async()=>{calls++;return calls===1
     ? new Response(JSON.stringify({error:{message:"primary quota"}}),{status:429})
-    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200})};
   try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,200);assert.equal(calls,2);assert.equal(body.model,"gemini-3.5-flash-lite");assert.equal(body.fallback_used,true)}finally{globalThis.fetch=previous}
 });
 
@@ -279,7 +290,7 @@ test("evidence Cloudflare 524 triggers bounded Lite fallback",async()=>{
   calls++;urls.push(url);assert.ok(options.signal instanceof AbortSignal);
   return calls<=3
     ? new Response("<html>Origin timed out</html>",{status:524})
-    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200});
  };
  try{const r=await worker.fetch(post(valid),env);const b=await r.json();
   assert.equal(r.status,200);assert.equal(calls,4);
@@ -292,7 +303,7 @@ test("evidence primary network timeouts still allow Lite fallback",async()=>{
  globalThis.fetch=async(_url,options)=>{
   calls++;assert.ok(options.signal instanceof AbortSignal);
   if(calls<=3)throw Object.assign(new Error("Upstream timed out"),{name:"TimeoutError"});
-  return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+  return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap())}]}}]}),{status:200});
  };
  try{const r=await worker.fetch(post(valid),env);const b=await r.json();
   assert.equal(r.status,200);assert.equal(calls,4);assert.equal(b.fallback_used,true);
@@ -309,7 +320,7 @@ test("evidence persistent Cloudflare 524 is reported after five bounded calls",a
 test("reports the exact invalid recap field instead of a generic validation error",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
-    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:1000,summary_my:"Scene",evidence:[]}],uncertainties:[]
+    ...emptyRecap("ဇာတ်လမ်း",[{start_ms:0,end_ms:1000,summary_my:"Scene",cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],evidence:[]}])
   })}]}}]}),{status:200});
   try{
     const r=await worker.fetch(post(valid),env);const body=await r.json();
@@ -319,7 +330,7 @@ test("reports the exact invalid recap field instead of a generic validation erro
 });
 test("accepts valid JSON wrapped in a markdown JSON fence",async()=>{
   const previous=globalThis.fetch;
-  const recap={narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]};
+  const recap=emptyRecap();
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:"```json\n"+JSON.stringify(recap)+"\n```"}]}}]}),{status:200});
   try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);assert.equal((await r.json()).narration_my,"ဇာတ်လမ်း")}
   finally{globalThis.fetch=previous}
@@ -333,7 +344,7 @@ test("evidence fallback keeps real network diagnostics and continues to the next
     if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
     if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
     return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
-      narration_my:"မြန်မာဇာတ်လမ်း",events:[],uncertainties:[]
+      ...emptyRecap("မြန်မာဇာတ်လမ်း")
     })}]}}]}),{status:200});
   };
   try{
@@ -372,7 +383,7 @@ test("evidence reports the actual final fallback network error instead of a gene
 test("invalid recap error includes the exact validation failure for the Android client",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
-    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:1000,summary_my:"Scene",evidence:[]}],uncertainties:[]
+    ...emptyRecap("ဇာတ်လမ်း",[{start_ms:0,end_ms:1000,summary_my:"Scene",cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],evidence:[]}])
   })}]}}]}),{status:200});
   try{
     const r=await worker.fetch(post(valid),env);const body=await r.json();
@@ -380,4 +391,79 @@ test("invalid recap error includes the exact validation failure for the Android 
     assert.ok(body.error.includes("events[0].evidence must contain"));
     assert.equal(body.error, "AI returned invalid recap structure: events[0].evidence must contain 1-20 non-empty evidence strings");
   }finally{globalThis.fetch=previous}
+});
+
+test("rejects events that reference a character missing from the story map",async()=>{
+  const previous=globalThis.fetch;
+  const recap=emptyRecap("ဇာတ်လမ်း",[{start_ms:0,end_ms:2000,summary_my:"Scene",cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:["unknown"],evidence:["dialogue"]}]);
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(recap)}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.equal(body.validation_error,"events[0].character_ids must contain only known character IDs");
+  }finally{globalThis.fetch=previous}
+});
+
+test("rejects character first-seen timestamps outside supplied evidence",async()=>{
+  const previous=globalThis.fetch;
+  const recap=emptyRecap();
+  recap.story_map.characters=[{id:"c1",name:"A",role_my:"ဇာတ်ကောင်",first_seen_ms:5000,evidence:["dialogue"]}];
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(recap)}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.match(body.validation_error,/first_seen_ms is outside the supplied evidence timeline/);
+  }finally{globalThis.fetch=previous}
+});
+
+test("requires the story map contract before returning a recap",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.equal(body.validation_error,"story_map must be an object");
+  }finally{globalThis.fetch=previous}
+});
+
+test("rejects narration longer than the Android voice input limit",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap("က".repeat(1401)))}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.equal(body.validation_error,"narration_my must be a non-empty string of at most 1400 characters");
+  }finally{globalThis.fetch=previous}
+});
+
+test("supports visual-only recap when no speech transcript is available",async()=>{
+  const previous=globalThis.fetch;let prompt="";
+  const visualRecap=emptyRecap("မြင်ရသောအဖြစ်အပျက်",[{
+    start_ms:1000,end_ms:2000,summary_my:"မြင်ကွင်းတွင် လူတစ်ဦး လမ်းလျှောက်နေသည်",
+    cause_my:"မသေချာပါ",consequence_my:"မသေချာပါ",character_ids:[],
+    evidence:["Sampled frame at 1000 ms","Sampled frame at 2000 ms"]
+  }]);
+  globalThis.fetch=async(_url,opts)=>{
+    prompt=JSON.parse(opts.body).contents[0].parts[0].text;
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(visualRecap)}]}}]}),{status:200});
+  };
+  try{
+    const r=await worker.fetch(post({transcript_segments:[],frames:[
+      {time_ms:1000,jpeg_base64:"AAAA"},{time_ms:2000,jpeg_base64:"AAAA"}
+    ]}),env);
+    const body=await r.json();
+    assert.equal(r.status,200);
+    assert.equal(body.analysis_contract,"story-map-v1");
+    assert.equal(body.evidence_mode,"visual_only");
+    assert.equal(body.mode,"story-map-visual-only");
+    assert.equal(body.events.length,1);
+    assert.match(prompt,/Evidence mode: visual_only/);
+    assert.match(prompt,/use visual evidence only/);
+  }finally{globalThis.fetch=previous}
+});
+
+test("rejects visual-only analysis when no frames are supplied",async()=>{
+  const r=await worker.fetch(post({transcript_segments:[],frames:[]}),env);
+  assert.equal(r.status,400);
+  assert.equal((await r.json()).error,"At least one transcript segment or sampled video frame is required");
 });
