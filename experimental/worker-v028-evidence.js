@@ -159,7 +159,7 @@ export default {
     const error=validate(input);if(error)return reply({error},400);
     const transcriptSegments=input.transcript_segments||[];
     const evidenceMode=transcriptSegments.length>0?"audio_and_visual":"visual_only";
-    const transcript=transcriptSegments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\\n");
+    const transcript=transcriptSegments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\n");
     const instructions=[
       "You are a careful movie story analyst and a professional Burmese recap narrator.",
       "Evidence mode: "+evidenceMode+".",
@@ -179,8 +179,8 @@ export default {
       "Every character and turning point must include evidence. Every event character_ids entry must refer to an id in story_map.characters.",
       "Keep event timestamps within the supplied evidence timeline and order events chronologically. Keep the story map and narration consistent with the events.",
       "If evidence conflicts, distinguish a character claim from a verified event and add the conflict to uncertainties.",
-      "Timestamped transcript (empty means no speech transcript is available):\\n"+(transcript||"[No speech transcript supplied; use visual evidence only.]")
-    ].join("\\n");
+      "Timestamped transcript (empty means no speech transcript is available):\n"+(transcript||"[No speech transcript supplied; use visual evidence only.]")
+    ].join("\n");
     const parts=[{text:instructions}];
     for(const frame of input.frames||[]){
       parts.push({text:`Sampled frame at ${frame.time_ms} ms (visual context only):`});
