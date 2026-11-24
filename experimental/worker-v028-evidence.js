@@ -1,4 +1,4 @@
-// W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
+// W.H.K v0.29 story-map prototype. Isolated branch; not deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
 const FALLBACK_MODELS=["gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
@@ -7,46 +7,75 @@ const RECAP_RESPONSE_SCHEMA={
   type:"OBJECT",
   properties:{
     narration_my:{type:"STRING"},
+    story_map:{
+      type:"OBJECT",
+      properties:{
+        characters:{
+          type:"ARRAY",
+          items:{type:"OBJECT",properties:{id:{type:"STRING"},name:{type:"STRING"},role_my:{type:"STRING"},first_seen_ms:{type:"INTEGER"},evidence:{type:"ARRAY",items:{type:"STRING"}}},required:["id","name","role_my","first_seen_ms","evidence"]}
+        },
+        story_arc:{
+          type:"OBJECT",
+          properties:{
+            opening_my:{type:"STRING"},central_conflict_my:{type:"STRING"},
+            turning_points:{type:"ARRAY",items:{type:"OBJECT",properties:{start_ms:{type:"INTEGER"},summary_my:{type:"STRING"},evidence:{type:"ARRAY",items:{type:"STRING"}}},required:["start_ms","summary_my","evidence"]}},
+            climax_my:{type:"STRING"},resolution_my:{type:"STRING"}
+          },
+          required:["opening_my","central_conflict_my","turning_points","climax_my","resolution_my"]
+        }
+      },
+      required:["characters","story_arc"]
+    },
     events:{
       type:"ARRAY",
-      items:{
-        type:"OBJECT",
-        properties:{
-          start_ms:{type:"INTEGER"},
-          end_ms:{type:"INTEGER"},
-          summary_my:{type:"STRING"},
-          evidence:{type:"ARRAY",items:{type:"STRING"}}
-        },
-        required:["start_ms","end_ms","summary_my","evidence"]
-      }
+      items:{type:"OBJECT",properties:{start_ms:{type:"INTEGER"},end_ms:{type:"INTEGER"},summary_my:{type:"STRING"},cause_my:{type:"STRING"},consequence_my:{type:"STRING"},character_ids:{type:"ARRAY",items:{type:"STRING"}},evidence:{type:"ARRAY",items:{type:"STRING"}}},required:["start_ms","end_ms","summary_my","cause_my","consequence_my","character_ids","evidence"]}
     },
     uncertainties:{type:"ARRAY",items:{type:"STRING"}}
   },
-  required:["narration_my","events","uncertainties"]
+  required:["narration_my","story_map","events","uncertainties"]
 };
 function validateRecapStructure(result,input){
   if(!result||typeof result!=="object"||Array.isArray(result))return "response must be a JSON object";
-  if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500)
-    return "narration_my must be a non-empty string of at most 2500 characters";
+  if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500)return "narration_my must be a non-empty string of at most 2500 characters";
+  const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
+  const storyMap=result.story_map;
+  if(!storyMap||typeof storyMap!=="object"||Array.isArray(storyMap))return "story_map must be an object";
+  if(!Array.isArray(storyMap.characters)||storyMap.characters.length>40)return "story_map.characters must be an array with at most 40 items";
+  const characterIds=new Set();
+  for(let i=0;i<storyMap.characters.length;i++){
+    const character=storyMap.characters[i];
+    if(!character||typeof character!=="object"||typeof character.id!=="string"||!/^[a-zA-Z0-9_-]{1,32}$/.test(character.id))return `story_map.characters[${i}].id must be a stable 1-32 character identifier`;
+    if(characterIds.has(character.id))return `story_map.characters[${i}].id must be unique`;
+    characterIds.add(character.id);
+    if(typeof character.name!=="string"||!character.name.trim()||character.name.length>120)return `story_map.characters[${i}].name must be a non-empty string of at most 120 characters`;
+    if(typeof character.role_my!=="string"||!character.role_my.trim()||character.role_my.length>500)return `story_map.characters[${i}].role_my must be a non-empty string of at most 500 characters`;
+    if(!Number.isSafeInteger(character.first_seen_ms)||character.first_seen_ms<0||character.first_seen_ms>maxEvidenceTime)return `story_map.characters[${i}].first_seen_ms is outside the supplied evidence timeline`;
+    if(!Array.isArray(character.evidence)||character.evidence.length===0||character.evidence.length>10||character.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))return `story_map.characters[${i}].evidence must contain 1-10 non-empty evidence strings`;
+  }
+  const arc=storyMap.story_arc;
+  if(!arc||typeof arc!=="object"||Array.isArray(arc))return "story_map.story_arc must be an object";
+  for(const field of ["opening_my","central_conflict_my","climax_my","resolution_my"])if(typeof arc[field]!=="string"||arc[field].length>1500)return `story_map.story_arc.${field} must be a string of at most 1500 characters`;
+  if(!Array.isArray(arc.turning_points)||arc.turning_points.length>20)return "story_map.story_arc.turning_points must be an array with at most 20 items";
+  for(let i=0;i<arc.turning_points.length;i++){
+    const point=arc.turning_points[i];
+    if(!point||typeof point!=="object"||!Number.isSafeInteger(point.start_ms)||point.start_ms<0||point.start_ms>maxEvidenceTime)return `story_map.story_arc.turning_points[${i}].start_ms is outside the supplied evidence timeline`;
+    if(typeof point.summary_my!=="string"||!point.summary_my.trim()||point.summary_my.length>1200)return `story_map.story_arc.turning_points[${i}].summary_my must be a non-empty string of at most 1200 characters`;
+    if(!Array.isArray(point.evidence)||point.evidence.length===0||point.evidence.length>10||point.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))return `story_map.story_arc.turning_points[${i}].evidence must contain 1-10 non-empty evidence strings`;
+  }
   if(!Array.isArray(result.events)||result.events.length>500)return "events must be an array with at most 500 items";
   if(!Array.isArray(result.uncertainties)||result.uncertainties.length>100)return "uncertainties must be an array with at most 100 strings";
-  for(let i=0;i<result.uncertainties.length;i++)
-    if(typeof result.uncertainties[i]!=="string"||result.uncertainties[i].length>1000)
-      return `uncertainties[${i}] must be a string of at most 1000 characters`;
-  const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
+  for(let i=0;i<result.uncertainties.length;i++)if(typeof result.uncertainties[i]!=="string"||result.uncertainties[i].length>1000)return `uncertainties[${i}] must be a string of at most 1000 characters`;
   let previousStart=-1;
   for(let i=0;i<result.events.length;i++){
     const event=result.events[i];
-    if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms))
-      return `events[${i}].start_ms and end_ms must be integer milliseconds`;
-    if(event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime)
-      return `events[${i}] timestamp is outside the supplied evidence timeline`;
+    if(!event||typeof event!=="object"||!Number.isSafeInteger(event.start_ms)||!Number.isSafeInteger(event.end_ms))return `events[${i}].start_ms and end_ms must be integer milliseconds`;
+    if(event.start_ms<0||event.end_ms<=event.start_ms||event.end_ms>maxEvidenceTime)return `events[${i}] timestamp is outside the supplied evidence timeline`;
     if(event.start_ms<previousStart)return `events[${i}] is not in chronological order`;
-    if(typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000)
-      return `events[${i}].summary_my must be a non-empty string of at most 3000 characters`;
-    if(!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||
-      event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))
-      return `events[${i}].evidence must contain 1-20 non-empty evidence strings`;
+    if(typeof event.summary_my!=="string"||!event.summary_my.trim()||event.summary_my.length>3000)return `events[${i}].summary_my must be a non-empty string of at most 3000 characters`;
+    if(typeof event.cause_my!=="string"||!event.cause_my.trim()||event.cause_my.length>1200)return `events[${i}].cause_my must be a non-empty string of at most 1200 characters`;
+    if(typeof event.consequence_my!=="string"||!event.consequence_my.trim()||event.consequence_my.length>1200)return `events[${i}].consequence_my must be a non-empty string of at most 1200 characters`;
+    if(!Array.isArray(event.character_ids)||event.character_ids.length>12||event.character_ids.some(id=>typeof id!=="string"||!characterIds.has(id)))return `events[${i}].character_ids must contain only known character IDs`;
+    if(!Array.isArray(event.evidence)||event.evidence.length===0||event.evidence.length>20||event.evidence.some(x=>typeof x!=="string"||!x.trim()||x.length>500))return `events[${i}].evidence must contain 1-20 non-empty evidence strings`;
     previousStart=event.start_ms;
   }
   return null;
@@ -115,7 +144,7 @@ function validate(input){
 export default {
   async fetch(request,env){
     const path=new URL(request.url).pathname;
-    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",capabilities:["audio-transcription","transcript-plus-sampled-frames"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
+    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",analysis_contract:"story-map-v1",capabilities:["audio-transcription","transcript-plus-sampled-frames","character-ledger","cause-and-effect-story-map"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
     if(request.method!=="POST"||path!=="/api/analyze-evidence")return reply({error:"Not found"},404);
     if(!env.APP_TOKEN||!env.GEMINI_API_KEY)return reply({error:"Server not configured"},503);
     if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return reply({error:"Unauthorized"},401);
@@ -127,18 +156,23 @@ export default {
     const error=validate(input);if(error)return reply({error},400);
     const transcript=input.transcript_segments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\n");
     const instructions=[
-      "Write a coherent chronological Burmese movie recap grounded ONLY in the evidence.",
-      "Transcript is audio/dialogue evidence. Frames are sparse visual evidence, not the whole movie.",
-      "Never invent unseen plot details. Identify ambiguous events as uncertain.",
-      "Avoid frame-by-frame captions; write natural connected storytelling.",
-      "Keep narration suitable for a 45–60 second voiceover and at most 2500 Unicode characters.",
-      "Return 6–16 chronological key story events when the evidence supports them; do not invent events to reach a count.",
-      "Return JSON matching the required response schema exactly; use integer milliseconds for every event start_ms and end_ms.",
-      "Every event must have a non-empty summary_my and 1-20 short evidence strings copied from the transcript or identifying a supplied sampled frame.",
-      "Keep every event timestamp within the supplied evidence timeline and order events chronologically.",
-      "If the supplied evidence cannot support an event, omit that event and explain the uncertainty instead of inventing details.",
-      "Timestamped transcript:\n"+transcript
-    ].join("\n");
+      "You are a careful movie story analyst and a professional Burmese recap narrator.",
+      "Build an evidence-grounded story map before writing the final narration. Do this analysis silently; output only the required structured result, not private reasoning.",
+      "STEP 1 — CHARACTER LEDGER: identify each distinct person or speaking character, keep identities separate, record roles and relationships only when supported, and assign a stable unique id such as c1 or c2. Never merge characters because names or voices sound similar.",
+      "For each character, first_seen_ms is the earliest supplied timestamp supporting that identity. Include 1-10 short evidence references. If a character cannot be identified confidently, omit them and record the uncertainty.",
+      "STEP 2 — CHRONOLOGY: reconstruct the order of supported events from timestamped dialogue and supplied frames. Do not confuse the order in which dialogue mentions something with the time it happened.",
+      "STEP 3 — CAUSE AND EFFECT: for every event, state its supported cause and consequence. If either link is unknown, say မသေချာပါ rather than inventing a motive, relationship, action, or outcome.",
+      "STEP 4 — STORY ARC: identify the opening situation, central conflict, turning points, climax, and resolution only where evidence supports them. Empty strings are allowed for unsupported arc fields; never force a complete ending when the evidence stops earlier.",
+      "STEP 5 — VISUAL CROSS-CHECK: transcript is audio/dialogue evidence. Frames are sparse still-image evidence, not the whole movie. A still frame cannot prove motion or an unseen action. Do not claim full-video visual analysis.",
+      "STEP 6 — BURMESE NARRATION: write fluent, natural Myanmar storytelling with clear transitions, correct character continuity, and chronological cause-and-effect. Preserve names when known. Avoid repetitive openings, generic filler, frame-by-frame captions, and unsupported details.",
+      "Keep narration suitable for a 45–60 second voiceover and at most 2500 Unicode characters so the existing Android voice/export pipeline remains compatible.",
+      "Return 6–16 chronological key story events only when the evidence supports them; fewer events are better than invented events.",
+      "Return JSON matching the required response schema exactly. Use integer milliseconds for all timestamps. Every event must include summary_my, cause_my, consequence_my, character_ids, and 1-20 concise evidence strings.",
+      "Every character and turning point must include evidence. Every event character_ids entry must refer to an id in story_map.characters.",
+      "Keep event timestamps within the supplied evidence timeline and order events chronologically. Keep the story map and narration consistent with the events.",
+      "If evidence conflicts, distinguish a character claim from a verified event and add the conflict to uncertainties.",
+      "Timestamped transcript:\\n"+transcript
+    ].join("\\n");
     const parts=[{text:instructions}];
     for(const frame of input.frames||[]){
       parts.push({text:`Sampled frame at ${frame.time_ms} ms (visual context only):`});
@@ -215,6 +249,6 @@ export default {
     if(validationError){
       return reply({error:"AI returned invalid recap structure: "+validationError,validation_error:validationError,model:activeModel,fallback_used,attempts},502);
     }
-    return reply({version:"0.28-prototype",model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,mode:"transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
+    return reply({version:"0.29-prototype",analysis_contract:"story-map-v1",model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,mode:"story-map-transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
   }
 };
