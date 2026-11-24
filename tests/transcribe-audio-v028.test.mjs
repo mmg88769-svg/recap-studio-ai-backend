@@ -66,3 +66,43 @@ test("transcription Cloudflare 524 uses an AbortSignal and Lite model",async()=>
   assert.equal(b.transcript_segments[0].text,"Hello");
  }finally{globalThis.fetch=previous}
 });
+
+
+test("transcription fallback preserves network diagnostics and continues to second Lite model",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ const ok={candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1000,text:"Hello",language:"en"}],uncertainties:[]})}]}}]};
+ globalThis.fetch=async()=>{
+  calls++;
+  if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+  if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+  return new Response(JSON.stringify(ok),{status:200});
+ };
+ try{
+  const r=await worker.fetch(req(),env);const body=await r.json();
+  assert.equal(r.status,200);assert.equal(calls,5);
+  assert.equal(body.model,"gemini-3.1-flash-lite");
+  assert.deepEqual(body.fallback_models_tried,["gemini-3.5-flash-lite","gemini-3.1-flash-lite"]);
+  assert.equal(body.fallback_network_errors[0].name,"NetworkError");
+  assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+ }finally{globalThis.fetch=old}
+});
+
+test("transcription returns actual final fallback timeout detail instead of generic unreachable message",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{
+  calls++;
+  if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+  if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+  throw Object.assign(new Error("The operation was aborted"),{name:"TimeoutError"});
+ };
+ try{
+  const r=await worker.fetch(req(),env);const body=await r.json();
+  assert.equal(r.status,502);assert.equal(calls,5);
+  assert.equal(body.provider_status,503);
+  assert.match(body.detail,/TimeoutError/);
+  assert.match(body.detail,/The operation was aborted/);
+  assert.equal(body.fallback_network_errors.length,2);
+  assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+  assert.equal(body.fallback_network_errors[1].name,"TimeoutError");
+ }finally{globalThis.fetch=old}
+});
