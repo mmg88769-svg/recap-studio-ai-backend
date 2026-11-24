@@ -18,6 +18,12 @@ jobs:
       - run: node --check experimental/transcribe-audio-v028.js
       - run: node --test tests/worker-v028.test.mjs
 
+      - run: node --test tests/transcribe-audio-v028.test.mjs
+
+  video-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Ensure FFmpeg for video tests
         run: |
           if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
@@ -45,6 +51,7 @@ jobs:
 
       - name: Validate offline recap orchestration
         run: python3 -m unittest discover -s tests -p 'test_offline_pipeline.py'
+
 
   deploy-staging:
     needs: test
