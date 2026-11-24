@@ -37,7 +37,7 @@ const RECAP_RESPONSE_SCHEMA={
 function validateRecapStructure(result,input){
   if(!result||typeof result!=="object"||Array.isArray(result))return "response must be a JSON object";
   if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>1400)return "narration_my must be a non-empty string of at most 1400 characters";
-  const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
+  const maxEvidenceTime=Math.max(...(input.transcript_segments||[]).map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
   const storyMap=result.story_map;
   if(!storyMap||typeof storyMap!=="object"||Array.isArray(storyMap))return "story_map must be an object";
   if(!Array.isArray(storyMap.characters)||storyMap.characters.length>40)return "story_map.characters must be an array with at most 40 items";
