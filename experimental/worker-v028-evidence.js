@@ -126,9 +126,10 @@ async function fetchWithTransientRetry(url, options) {
 
 function validate(input){
   if(!input || typeof input!=="object")return "JSON object required";
-  if(!Array.isArray(input.transcript_segments)||input.transcript_segments.length<1||input.transcript_segments.length>2000)return "1-2000 transcript_segments required";
+  const segments=input.transcript_segments===undefined?[]:input.transcript_segments;
+  if(!Array.isArray(segments)||segments.length>2000)return "transcript_segments must be an array with at most 2000 items";
   let previous=-1,total=0;
-  for(const s of input.transcript_segments){
+  for(const s of segments){
     if(!Number.isFinite(s.start_ms)||!Number.isFinite(s.end_ms)||s.start_ms<0||s.end_ms<=s.start_ms||s.start_ms<previous||typeof s.text!=="string"||s.text.length>2000)return "Invalid or unsorted transcript segment";
     previous=s.start_ms;total+=s.text.length;
   }
@@ -139,12 +140,14 @@ function validate(input){
       if(!Number.isFinite(f.time_ms)||f.time_ms<0||typeof f.jpeg_base64!=="string"||f.jpeg_base64.length>450000||f.jpeg_base64.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(f.jpeg_base64))return "Invalid JPEG frame";
     }
   }
+  if(segments.length===0&&(!Array.isArray(input.frames)||input.frames.length===0))
+    return "At least one transcript segment or sampled video frame is required";
   return null;
 }
 export default {
   async fetch(request,env){
     const path=new URL(request.url).pathname;
-    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",analysis_contract:"story-map-v1",capabilities:["audio-transcription","transcript-plus-sampled-frames","character-ledger","cause-and-effect-story-map"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
+    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",analysis_contract:"story-map-v1",capabilities:["audio-transcription","transcript-plus-sampled-frames","visual-only-recap","character-ledger","cause-and-effect-story-map"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
     if(request.method!=="POST"||path!=="/api/analyze-evidence")return reply({error:"Not found"},404);
     if(!env.APP_TOKEN||!env.GEMINI_API_KEY)return reply({error:"Server not configured"},503);
     if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return reply({error:"Unauthorized"},401);
@@ -154,9 +157,14 @@ export default {
     try{const raw=await request.text();if(raw.length>MAX_BODY)return reply({error:"Request too large"},413);input=JSON.parse(raw);}
     catch{return reply({error:"Invalid JSON"},400);}
     const error=validate(input);if(error)return reply({error},400);
-    const transcript=input.transcript_segments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\n");
+    const transcriptSegments=input.transcript_segments||[];
+    const evidenceMode=transcriptSegments.length>0?"audio_and_visual":"visual_only";
+    const transcript=transcriptSegments.map(s=>`[${s.start_ms}-${s.end_ms} ms] ${s.text}`).join("\\n");
     const instructions=[
       "You are a careful movie story analyst and a professional Burmese recap narrator.",
+      "Evidence mode: "+evidenceMode+".",
+      "If evidence mode is visual_only, there is no reliable speech transcript. Describe only clearly visible people, objects, and actions in timestamp order. Do not invent dialogue, names, relationships, motives, off-screen causes, or an unseen ending. If the visual evidence is too sparse to support a plot, produce a concise visual recap and record the limits in uncertainties.",
+      "If evidence mode is audio_and_visual, combine the timestamped transcript with the sampled frames, but do not let dialogue claims override contradictory visual evidence without noting the conflict.",
       "Build an evidence-grounded story map before writing the final narration. Do this analysis silently; output only the required structured result, not private reasoning.",
       "STEP 1 — CHARACTER LEDGER: identify each distinct person or speaking character, keep identities separate, record roles and relationships only when supported, and assign a stable unique id such as c1 or c2. Never merge characters because names or voices sound similar.",
       "For each character, first_seen_ms is the earliest supplied timestamp supporting that identity. Include 1-10 short evidence references. If a character cannot be identified confidently, omit them and record the uncertainty.",
@@ -171,7 +179,7 @@ export default {
       "Every character and turning point must include evidence. Every event character_ids entry must refer to an id in story_map.characters.",
       "Keep event timestamps within the supplied evidence timeline and order events chronologically. Keep the story map and narration consistent with the events.",
       "If evidence conflicts, distinguish a character claim from a verified event and add the conflict to uncertainties.",
-      "Timestamped transcript:\\n"+transcript
+      "Timestamped transcript (empty means no speech transcript is available):\\n"+(transcript||"[No speech transcript supplied; use visual evidence only.]")
     ].join("\\n");
     const parts=[{text:instructions}];
     for(const frame of input.frames||[]){
@@ -249,6 +257,6 @@ export default {
     if(validationError){
       return reply({error:"AI returned invalid recap structure: "+validationError,validation_error:validationError,model:activeModel,fallback_used,attempts},502);
     }
-    return reply({version:"0.29-prototype",analysis_contract:"story-map-v1",model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,mode:"story-map-transcript-plus-sampled-frames",audio_analyzed_from:"client_supplied_transcript",...result});
+    return reply({version:"0.29-prototype",analysis_contract:"story-map-v1",evidence_mode:evidenceMode,model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,mode:evidenceMode==="visual_only"?"story-map-visual-only":"story-map-transcript-plus-sampled-frames",audio_analyzed_from:transcriptSegments.length>0?"client_supplied_transcript":"none",...result});
   }
 };
