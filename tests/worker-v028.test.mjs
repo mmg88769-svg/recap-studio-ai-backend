@@ -32,7 +32,7 @@ test("returns structured grounded recap",async()=>{
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
     assert.ok(providerUrl.includes("models/gemini-3.8-flash"));
     assert.equal(body.model,"gemini-3.8-flash");
-    assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+    assert.match(payload.contents[0].parts[0].text,/Follow the supplied movie timeline in timestamp order/);
     assert.equal(payload.generationConfig.responseMimeType,"application/json");
     assert.deepEqual(payload.generationConfig.responseSchema.required,["narration_my","events","uncertainties"]);
     assert.equal(payload.generationConfig.responseSchema.properties.events.items.properties.start_ms.type,"INTEGER");
@@ -65,6 +65,61 @@ test("rejects AI events outside supplied evidence timeline",async()=>{
     assert.match(body.validation_error,/outside the supplied evidence timeline/);
   }finally{globalThis.fetch=previous}
 });
+
+test("accepts exact transcript quotes and supplied frame timestamps as event evidence",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"သူ အခန်းထဲ ဝင်လာသည်။",
+    events:[{start_ms:0,end_ms:3000,summary_my:"သူ အခန်းထဲ ဝင်လာသည်။",evidence:[
+      'DIALOGUE: "He entered the room"',
+      "FRAME@1500ms: A person is visible near a doorway"
+    ]}],
+    uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const request=post({...valid,frames:[{time_ms:1500,jpeg_base64:"YWJj"}]});
+    const response=await worker.fetch(request,env);
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.events[0].evidence.length,2);
+  }finally{globalThis.fetch=previous}
+});
+
+test("rejects fabricated dialogue citations that are absent from the transcript",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"သူ ဘုရင်ဖြစ်သွားသည်။",
+    events:[{start_ms:0,end_ms:3000,summary_my:"သူ ဘုရင်ဖြစ်သွားသည်။",evidence:[
+      'DIALOGUE: "He became the king"'
+    ]}],
+    uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const response=await worker.fetch(post(valid),env);
+    assert.equal(response.status,502);
+    const body=await response.json();
+    assert.match(body.validation_error,/exact transcript quote/);
+  }finally{globalThis.fetch=previous}
+});
+
+test("removes unsupported evidence citations when a grounded citation is present",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"သူ အခန်းထဲ ဝင်လာသည်။",
+    events:[{start_ms:0,end_ms:3000,summary_my:"သူ အခန်းထဲ ဝင်လာသည်။",evidence:[
+      'DIALOGUE: "He entered the room"',
+      'DIALOGUE: "He was crowned king"'
+    ]}],
+    uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const response=await worker.fetch(post(valid),env);
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.deepEqual(body.events[0].evidence,['DIALOGUE: "He entered the room"']);
+  }finally{globalThis.fetch=previous}
+});
+
 test("rejects AI events without evidence references",async()=>{
   const previous=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
