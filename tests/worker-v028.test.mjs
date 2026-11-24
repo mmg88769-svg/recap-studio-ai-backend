@@ -424,3 +424,13 @@ test("requires the story map contract before returning a recap",async()=>{
     assert.equal(body.validation_error,"story_map must be an object");
   }finally{globalThis.fetch=previous}
 });
+
+test("rejects narration longer than the Android voice input limit",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(emptyRecap("က".repeat(1401)))}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.equal(body.validation_error,"narration_my must be a non-empty string of at most 1400 characters");
+  }finally{globalThis.fetch=previous}
+});
