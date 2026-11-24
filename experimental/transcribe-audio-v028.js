@@ -56,7 +56,14 @@ export default {
   catch{return json({error:"Invalid JSON"},400)}
   if(!input||!MIME.has(input.mime_type)||typeof input.audio_base64!=="string"||input.audio_base64.length===0||input.audio_base64.length>MAX_BASE64||input.audio_base64.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio_base64))return json({error:"Invalid audio payload"},400);
   const instruction="Transcribe the spoken dialogue of this short audio clip in its original language. Include accurate clip-relative millisecond timestamps for each spoken segment. Do not invent speech. For non-speech clips, return an empty segments array. Output JSON object with segments array of {start_ms,end_ms,text,language} and uncertainties array of strings.";
+  const providerError = error => ({
+    name:String(error?.name||"Error").slice(0,60),
+    message:String(error?.message||"Network request failed")
+      .replaceAll("https://generativelanguage.googleapis.com","[upstream]")
+      .slice(0,180)
+  });
   let response, attempts = 0, activeModel = MODEL, fallback_used = false;
+  let primary_network_error=null;
   try{
    const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
     method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
@@ -64,26 +71,30 @@ export default {
    });
    response=result.response;
    attempts=result.attempts;
-  }catch{
+  }catch(error){
     attempts=3;
-    response=new Response(JSON.stringify({error:{message:"Primary model timed out"}}),{status:504,headers:{"content-type":"application/json"}});
+    primary_network_error=providerError(error);
+    response=new Response(JSON.stringify({error:{message:`Primary model network failure (${primary_network_error.name}): ${primary_network_error.message}`}}),{status:504,headers:{"content-type":"application/json"}});
   }
-  // A persistent Gemini 3.8 503 is overload, not a quota/authentication error.
-  // Try the official Free Tier multimodal Lite model only after primary retries fail.
+  // Keep actual upstream/network diagnostics; do not disguise a timeout as a generic 503.
   const fallback_models_tried=[];
+  const fallback_network_errors=[];
   for(const fallbackModel of FALLBACK_MODELS){
    if(response.status!==429&&!RETRYABLE_PROVIDER_STATUSES.has(response.status))break;
+   try{await response.body?.cancel();}catch{}
+   fallback_models_tried.push(fallbackModel);
    try{
-    try{await response.body?.cancel();}catch{}
     const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
      method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
      headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
      body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
     });
-    response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);
-   }catch{
-    attempts++;activeModel=fallbackModel;fallback_used=true;fallback_models_tried.push(fallbackModel);
-    response=new Response(JSON.stringify({error:{message:"Fallback provider temporarily unreachable"}}),{status:503,headers:{"content-type":"application/json"}});
+    response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;
+   }catch(error){
+    const diagnostic=providerError(error);
+    fallback_network_errors.push({model:fallbackModel,...diagnostic});
+    attempts++;activeModel=fallbackModel;fallback_used=true;
+    response=new Response(JSON.stringify({error:{message:`Fallback model ${fallbackModel} network failure (${diagnostic.name}): ${diagnostic.message}`}}),{status:503,headers:{"content-type":"application/json"}});
    }
   }
   if(response.status===429){
@@ -92,13 +103,15 @@ export default {
    const retry_after_seconds=retryAfterSeconds(provider);
    return json({error:"Gemini quota/rate limit reached on primary and fallback models",provider_status:429,
     model:activeModel,fallback_used,fallback_models_tried,detail,quota_violations:quotaViolations(provider),
+    primary_network_error,fallback_network_errors,
     retryable:retry_after_seconds!==null,...(retry_after_seconds!==null?{retry_after_seconds}:{}),attempts},429);
   }
   if(!response.ok){
    let provider={};try{provider=await response.json()}catch{}
    const detail=String(provider?.error?.message||"").slice(0,240);
    return json({error:"AI provider failed (HTTP "+response.status+"): "+(detail||"Provider error"),
-    provider_status:response.status,model:activeModel,fallback_used,detail,retryable:response.status>=500,attempts},502);
+    provider_status:response.status,model:activeModel,fallback_used,fallback_models_tried,
+    primary_network_error,fallback_network_errors,detail,retryable:response.status>=500,attempts},502);
   }
   let body;try{body=await response.json()}catch{return json({error:"Invalid AI response"},502)}
   const text=(body?.candidates?.[0]?.content?.parts||[]).map(x=>x.text||"").join("").trim();
@@ -108,7 +121,7 @@ export default {
    for(const s of parsed.segments){
     if(!Number.isFinite(s.start_ms)||!Number.isFinite(s.end_ms)||s.start_ms<0||s.end_ms<=s.start_ms||typeof s.text!=="string"||typeof s.language!=="string")throw Error("segment");
    }
-   return json({version:"0.28-prototype",model:activeModel,fallback_used,timestamp_basis:"clip-relative",transcript_segments:parsed.segments,uncertainties:parsed.uncertainties});
+   return json({version:"0.28-prototype",model:activeModel,fallback_used,fallback_models_tried,primary_network_error,fallback_network_errors,timestamp_basis:"clip-relative",transcript_segments:parsed.segments,uncertainties:parsed.uncertainties});
   }catch{return json({error:"Invalid transcription structure"},502)}
  }
 };
