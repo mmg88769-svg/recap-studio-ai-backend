@@ -3,7 +3,7 @@ on:
   push:
     branches: [dev/whk-recap-video-audio-v028]
   pull_request:
-    branches: [main]
+    branches: [main, dev/whk-recap-video-audio-v028]
   workflow_dispatch:
 jobs:
   test:
