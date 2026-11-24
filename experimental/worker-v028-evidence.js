@@ -147,7 +147,7 @@ export default {
     const providerError = error => ({
       name: String(error?.name || "Error").slice(0, 60),
       message: String(error?.message || "Network request failed")
-        .replace(/https?:\\/\\/[^\\s]+/g, "[upstream]")
+        .replaceAll("https://generativelanguage.googleapis.com", "[upstream]")
         .slice(0, 180)
     });
     let response, attempts = 0, activeModel = MODEL, fallback_used = false;
