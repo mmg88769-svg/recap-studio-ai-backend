@@ -16,8 +16,15 @@ jobs:
       - run: node --check experimental/worker-v028-evidence.js
       - run: node --test tests/worker-v028.test.mjs
 
-      - name: Install FFmpeg for video tests
-        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - name: Ensure FFmpeg for video tests
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            echo "Using preinstalled FFmpeg on GitHub runner"
+          else
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          fi
 
       - name: Test video audio extraction and MP4 mixing
         run: python3 tests/video_pipeline_smoke.py
