@@ -78,7 +78,7 @@ function validateRecapStructure(result,input){
       return "events["+i+"].evidence must contain 1-20 non-empty evidence strings";
     const grounded=groundedEvidenceForEvent(event,input);
     if(grounded.length===0)
-      return "events["+i+"] timestamp is outside the supplied evidence timeline";
+      return "events["+i+"].evidence must cite an exact transcript quote with DIALOGUE: or a supplied frame timestamp with FRAME@...ms";
     // Drop unsupported citations when at least one valid source citation remains.
     event.evidence=grounded;
     previousStart=event.start_ms;
