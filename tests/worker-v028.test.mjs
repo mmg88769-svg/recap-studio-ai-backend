@@ -10,9 +10,9 @@ test("rejects missing authorization before parsing",async()=>{const r=await work
 test("rejects missing transcript",async()=>{const r=await worker.fetch(post({transcript_segments:[]}),env);assert.equal(r.status,400)});
 test("rejects invalid timestamps",async()=>{const r=await worker.fetch(post({transcript_segments:[{start_ms:4,end_ms:2,text:"a"}]}),env);assert.equal(r.status,400)});
 test("rejects more than eight frames",async()=>{const r=await worker.fetch(post({...valid,frames:Array.from({length:9},(_,i)=>({time_ms:i,jpeg_base64:"YWJj"}))}),env);assert.equal(r.status,400)});
-test("returns 429 without pretending success or retrying quota",async()=>{
-  const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota"}}),{status:429})};
-  try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true);assert.equal(calls,1)}finally{globalThis.fetch=previous}
+test("tries bounded model-specific fallbacks on evidence 429 without retrying the same model",async()=>{
+  const previous=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota exhausted"}}),{status:429})};
+  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,429);assert.equal(calls,3);assert.equal(body.provider_status,429);assert.equal(body.model,"gemini-3.1-flash-lite");assert.equal(body.fallback_used,true);assert.equal(body.fallback_models_tried.length,2)}finally{globalThis.fetch=previous}
 });
 test("retries transient Gemini 503 evidence overload and succeeds",async()=>{
   const previous=globalThis.fetch;let calls=0;
@@ -162,17 +162,21 @@ test("production worker does not use Lite fallback for TTS access errors",async(
     assert.equal(body.fallback_used,false);
   }finally{globalThis.fetch=previous}
 });
-test("production worker surfaces Gemini TTS free-tier quota without retrying",async()=>{
-  const previous=globalThis.fetch;
-  globalThis.fetch=async()=>new Response(JSON.stringify({error:{message:"quota"}}),{status:429});
+test("production worker tries Lite TTS once when primary model has a 429 quota limit",async()=>{
+  const previous=globalThis.fetch;let calls=0;const models=[];
+  globalThis.fetch=async(_url,options)=>{
+    calls++;models.push(JSON.parse(options.body).model);
+    return new Response(JSON.stringify({error:{message:"quota exhausted"}}),{status:429});
+  };
   try{
     const request=new Request("https://example.test/api/tts",{
       method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},
       body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my"})
     });
-    const response=await appWorker.fetch(request,env);
-    assert.equal(response.status,429);
-    assert.equal((await response.json()).retryable,true);
+    const response=await appWorker.fetch(request,env);const body=await response.json();
+    assert.equal(response.status,429);assert.equal(calls,2);
+    assert.deepEqual(models,["gemini-3.8-flash-tts","gemini-3.8-flash-lite-tts"]);
+    assert.equal(body.fallback_used,true);assert.equal(body.model,"gemini-3.8-flash-lite-tts");
   }finally{globalThis.fetch=previous}
 });
 
@@ -205,14 +209,15 @@ test("legacy recap retries 503 then uses first free-tier text fallback",async()=
     assert.equal(calls,4);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));
   }finally{globalThis.fetch=previous}
 });
-test("legacy recap stops after first 429 and does not switch models",async()=>{
+test("legacy recap tries bounded Lite model fallbacks on model-specific 429 quota",async()=>{
   const previous=globalThis.fetch;let calls=0;
   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota exhausted"}}),{status:429})};
   try{
     const r=await appWorker.fetch(legacyReq("/api/recap",{transcript:"A long dialogue source text for the story."}),env);
     const body=await r.json();
-    assert.equal(r.status,502);assert.equal(body.status,429);
-    assert.equal(calls,1);assert.equal(body.fallback_used,false);
+    assert.equal(r.status,429);assert.equal(body.status,429);
+    assert.equal(calls,3);assert.equal(body.fallback_used,true);
+    assert.equal(body.model,"gemini-3.1-flash-lite");
   }finally{globalThis.fetch=previous}
 });
 test("legacy translation tries both free-tier fallback models after persistent overload",async()=>{
@@ -239,5 +244,26 @@ test("legacy text generation surfaces fallback model if all providers overloaded
     assert.equal(r.status,502);assert.equal(body.status,503);
     assert.equal(body.model,"gemini-3.1-flash-lite");assert.equal(body.fallback_used,true);
     assert.equal(body.attempts,5);assert.equal(calls,5);
+  }finally{globalThis.fetch=previous}
+});
+
+test("evidence analysis succeeds on Lite fallback when primary model has 429 quota",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return calls===1
+    ? new Response(JSON.stringify({error:{message:"primary quota"}}),{status:429})
+    : new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({narration_my:"ဇာတ်လမ်း",events:[],uncertainties:[]})}]}}]}),{status:200})};
+  try{const r=await worker.fetch(post(valid),env);const body=await r.json();assert.equal(r.status,200);assert.equal(calls,2);assert.equal(body.model,"gemini-3.5-flash-lite");assert.equal(body.fallback_used,true)}finally{globalThis.fetch=previous}
+});
+
+test("legacy recap succeeds on Lite model when primary model returns 429",async()=>{
+  const previous=globalThis.fetch;let calls=0,urls=[];
+  globalThis.fetch=async url=>{calls++;urls.push(url);
+    return calls===1?new Response(JSON.stringify({error:{message:"primary quota"}}),{status:429}):
+      new Response(JSON.stringify({candidates:[{content:{parts:[{text:"မြန်မာဇာတ်လမ်း အကျဉ်းချုပ်"}]}}]}),{status:200});
+  };
+  try{
+    const r=await appWorker.fetch(legacyReq("/api/recap",{transcript:"A long dialogue source text for the story."}),env);
+    const body=await r.json();assert.equal(r.status,200);assert.match(body.script,/မြန်မာ/);
+    assert.equal(calls,2);assert.ok(urls[1].includes("gemini-3.5-flash-lite"));
   }finally{globalThis.fetch=previous}
 });

@@ -13,7 +13,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: node --check worker.js
       - run: node --check experimental/worker-v028-evidence.js
+      - run: node --check experimental/transcribe-audio-v028.js
       - run: node --test tests/worker-v028.test.mjs
 
       - name: Ensure FFmpeg for video tests

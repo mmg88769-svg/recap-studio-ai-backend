@@ -43,6 +43,42 @@ const fallbackVoiceModel = "gemini-3.8-flash-lite-tts";
 
 const RETRYABLE_PROVIDER_STATUSES = new Set([500,502,503,504]);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+function retryAfterSeconds(provider) {
+  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
+  const retryInfo = details.find(x => String(x?.["@type"] || "").includes("RetryInfo"));
+  const delay = String(retryInfo?.retryDelay || "").match(/(\\d+(?:\\.\\d+)?)s/i);
+  if (delay) return Math.max(1, Math.ceil(Number(delay[1])));
+  const message = String(provider?.error?.message || "").match(/retry in\\s+(\\d+(?:\\.\\d+)?)s/i);
+  return message ? Math.max(1, Math.ceil(Number(message[1]))) : null;
+}
+function quotaViolations(provider) {
+  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
+  const failure = details.find(x => String(x?.["@type"] || "").includes("QuotaFailure"));
+  return (Array.isArray(failure?.violations) ? failure.violations : []).slice(0, 8).map(v => ({
+    metric: String(v?.quotaMetric || "").slice(0, 120),
+    quota_id: String(v?.quotaId || "").slice(0, 120),
+    model: String(v?.quotaDimensions?.model || "").slice(0, 80),
+    quota_value: String(v?.quotaValue || "").slice(0, 30)
+  }));
+}
+function retryAfterSeconds(provider) {
+  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
+  const retryInfo = details.find(x => String(x?.["@type"] || "").includes("RetryInfo"));
+  const delay = String(retryInfo?.retryDelay || "").match(/(\\d+(?:\\.\\d+)?)s/i);
+  if (delay) return Math.max(1, Math.ceil(Number(delay[1])));
+  const message = String(provider?.error?.message || "").match(/retry in\\s+(\\d+(?:\\.\\d+)?)s/i);
+  return message ? Math.max(1, Math.ceil(Number(message[1]))) : null;
+}
+function quotaViolations(provider) {
+  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
+  const failure = details.find(x => String(x?.["@type"] || "").includes("QuotaFailure"));
+  return (Array.isArray(failure?.violations) ? failure.violations : []).slice(0, 8).map(v => ({
+    metric: String(v?.quotaMetric || "").slice(0, 120),
+    quota_id: String(v?.quotaId || "").slice(0, 120),
+    model: String(v?.quotaDimensions?.model || "").slice(0, 80),
+    quota_value: String(v?.quotaValue || "").slice(0, 30)
+  }));
+}
 async function fetchWithTransientRetry(url, options) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -71,9 +107,10 @@ async function gemini(env, model, payload) {
   };
   const models = model === textModel ? [model, ...fallbackTextModels] : [model];
   let response, activeModel = model, fallbackUsed = false, attempts = 0;
+  const fallbackModelsTried=[];
 
   for (const candidate of models) {
-    if (response && !RETRYABLE_PROVIDER_STATUSES.has(response.status)) break;
+    if (response && response.status !== 429 && !RETRYABLE_PROVIDER_STATUSES.has(response.status)) break;
     activeModel = candidate;
     fallbackUsed = candidate !== model;
     try {
@@ -94,6 +131,7 @@ async function gemini(env, model, payload) {
           };
       response = result.response;
       attempts += result.attempts;
+      if(candidate!==model)fallbackModelsTried.push(candidate);
     } catch {
       attempts += candidate === model ? 3 : 1;
       // Network failures should be reported, not masked by a fake successful response.
@@ -116,7 +154,10 @@ async function gemini(env, model, payload) {
     return {
       error: String(data?.error?.message || "AI provider error").slice(0,250),
       status: response.status,
-      model:activeModel,fallback_used:fallbackUsed,attempts
+      model:activeModel,fallback_used:fallbackUsed,attempts,
+      fallback_models_tried:fallbackModelsTried,
+      retry_after_seconds:retryAfterSeconds(data),
+      quota_violations:quotaViolations(data)
     };
   }
   return {data,model:activeModel,fallback_used:fallbackUsed,attempts};
@@ -226,10 +267,13 @@ export default {
             status: result.status,
             detail: result.error,
             attempts: result.attempts,
-            retryable: result.status >= 500,
+            retryable: result.status===429 ? result.retry_after_seconds!==null : result.status>=500,
+            retry_after_seconds: result.retry_after_seconds,
+            quota_violations: result.quota_violations,
+            fallback_models_tried: result.fallback_models_tried,
             model: result.model,
             fallback_used: result.fallback_used
-          }, 502);
+          }, result.status===429 ? 429 : 502);
         }
 
         const translation = outputText(result.data);
@@ -284,7 +328,7 @@ export default {
         let fallbackUsed=false;
         // A temporary capacity error (503) can affect one TTS model.
         // Free-tier Lite is a compatible secondary voice model, not a paid service.
-        if(response.status===503){
+        if(response.status===429 || RETRYABLE_PROVIDER_STATUSES.has(response.status)){
           try { await response.body?.cancel(); } catch {}
           const secondary=await fetch(interactionUrl,{
             method:"POST",headers,body:requestBody(fallbackVoiceModel)
@@ -297,9 +341,14 @@ export default {
         let data;
         try { data=await response.json(); }
         catch { return json({error:"Invalid Gemini TTS response",model:activeModel,fallback_used:fallbackUsed,attempts},502); }
-        if(response.status===429)
-          return json({error:"Gemini Free Tier TTS quota/rate limit",retryable:true,retry_after_seconds:60,
+        if(response.status===429){
+          const detail=String(data?.error?.message||"Gemini TTS quota/rate limit exhausted").slice(0,300);
+          const retry_after_seconds=retryAfterSeconds(data);
+          return json({error:"Gemini TTS quota/rate limit reached on primary and fallback models",
+            provider_status:429,detail,quota_violations:quotaViolations(data),
+            retryable:retry_after_seconds!==null,...(retry_after_seconds!==null?{retry_after_seconds}:{}),
             model:activeModel,fallback_used:fallbackUsed,attempts},429);
+        }
         if(!response.ok)
           return json({error:"Gemini TTS failed (HTTP "+response.status+"): "+(data?.error?.message?.slice(0,250)||"Provider error"),
             provider_status:response.status,detail:data?.error?.message?.slice(0,250)||"Provider error",
@@ -369,10 +418,13 @@ export default {
           status: result.status,
           detail: result.error,
           attempts: result.attempts,
-          retryable: result.status >= 500,
+          retryable: result.status===429 ? result.retry_after_seconds!==null : result.status>=500,
+          retry_after_seconds: result.retry_after_seconds,
+          quota_violations: result.quota_violations,
+          fallback_models_tried: result.fallback_models_tried,
           model: result.model,
           fallback_used: result.fallback_used
-        }, 502);
+        }, result.status===429 ? 429 : 502);
       }
 
       const script = outputText(result.data);

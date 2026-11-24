@@ -7,9 +7,10 @@ function req(data=payload,token="test-token"){return new Request("https://exampl
 test("requires token",async()=>assert.equal((await worker.fetch(req(payload,"invalid"),env)).status,401));
 test("rejects invalid audio",async()=>assert.equal((await worker.fetch(req({...payload,audio_base64:"not base64!"}),env)).status,400));
 test("rejects unsupported MIME",async()=>assert.equal((await worker.fetch(req({...payload,mime_type:"text/plain"}),env)).status,400));
-test("handles quota errors without retrying",async()=>{
- const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;return new Response("quota",{status:429})};
- try{const r=await worker.fetch(req(),env);assert.equal(r.status,429);assert.equal((await r.json()).retryable,true);assert.equal(calls,1)}finally{globalThis.fetch=old}
+test("tries each model once on 429 and returns final quota diagnostics without same-model retries",async()=>{
+ const old=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({error:{message:"quota exhausted",details:[{"@type":"type.googleapis.com/google.rpc.QuotaFailure",violations:[{quotaMetric:"generativelanguage.googleapis.com/generate_content_free_tier_requests",quotaId:"GenerateRequestsPerDayPerProjectPerModel-FreeTier",quotaDimensions:{model:"gemini-3.1-flash-lite"},quotaValue:"0"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo",retryDelay:"12s"}]}}),{status:429})};
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,429);assert.equal(calls,3);assert.equal(body.provider_status,429);assert.equal(body.model,"gemini-3.1-flash-lite");assert.equal(body.fallback_used,true);assert.equal(body.retryable,true);assert.equal(body.retry_after_seconds,12);assert.equal(body.quota_violations[0].quota_id,"GenerateRequestsPerDayPerProjectPerModel-FreeTier");assert.equal(body.fallback_models_tried.length,2)}finally{globalThis.fetch=old}
 });
 test("retries transient Gemini 503 overload and succeeds",async()=>{
  const old=globalThis.fetch;let calls=0;
@@ -42,4 +43,13 @@ test("uses second free-tier Lite model when primary and first fallback return 50
   return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
  };
  try{const r=await worker.fetch(req(),env);const j=await r.json();assert.equal(r.status,200);assert.equal(calls,5);assert.equal(j.model,"gemini-3.1-flash-lite");assert.equal(j.fallback_used,true);assert.ok(urls[3].includes("gemini-3.5-flash-lite"));assert.ok(urls[4].includes("gemini-3.1-flash-lite"))}finally{globalThis.fetch=old}
+});
+
+test("falls back to Gemini 3.5 Flash-Lite when primary model returns 429",async()=>{
+ const old=globalThis.fetch;let calls=0;const urls=[];
+ globalThis.fetch=async url=>{calls++;urls.push(url);
+  return calls===1?new Response(JSON.stringify({error:{message:"primary model quota"}}),{status:429}):
+   new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]})}]}}]}),{status:200});
+ };
+ try{const r=await worker.fetch(req(),env);const body=await r.json();assert.equal(r.status,200);assert.equal(calls,2);assert.equal(body.model,"gemini-3.5-flash-lite");assert.equal(body.fallback_used,true);assert.ok(urls[1].includes("gemini-3.5-flash-lite"))}finally{globalThis.fetch=old}
 });
