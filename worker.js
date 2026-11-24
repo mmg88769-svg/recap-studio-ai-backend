@@ -61,24 +61,7 @@ function quotaViolations(provider) {
     quota_value: String(v?.quotaValue || "").slice(0, 30)
   }));
 }
-function retryAfterSeconds(provider) {
-  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
-  const retryInfo = details.find(x => String(x?.["@type"] || "").includes("RetryInfo"));
-  const delay = String(retryInfo?.retryDelay || "").match(/(\d+(?:\.\d+)?)s/i);
-  if (delay) return Math.max(1, Math.ceil(Number(delay[1])));
-  const message = String(provider?.error?.message || "").match(/retry in\s+(\d+(?:\.\d+)?)s/i);
-  return message ? Math.max(1, Math.ceil(Number(message[1]))) : null;
-}
-function quotaViolations(provider) {
-  const details = Array.isArray(provider?.error?.details) ? provider.error.details : [];
-  const failure = details.find(x => String(x?.["@type"] || "").includes("QuotaFailure"));
-  return (Array.isArray(failure?.violations) ? failure.violations : []).slice(0, 8).map(v => ({
-    metric: String(v?.quotaMetric || "").slice(0, 120),
-    quota_id: String(v?.quotaId || "").slice(0, 120),
-    model: String(v?.quotaDimensions?.model || "").slice(0, 80),
-    quota_value: String(v?.quotaValue || "").slice(0, 30)
-  }));
-}
+
 async function fetchWithTransientRetry(url, options) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
