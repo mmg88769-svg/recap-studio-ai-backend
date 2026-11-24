@@ -89,6 +89,8 @@ test("production worker exposes protected v0.28 health route",async()=>{
   assert.equal(body.version,"0.28-prototype");
   assert.equal(body.mode,"integrated-prototype");
   assert.ok(body.capabilities.includes("audio-transcription"));
+  assert.ok(body.capabilities.includes("character-ledger"));
+  assert.equal(body.analysis_contract,"story-map-v1");
   assert.equal(body.ai_configured,true);
 });
 test("production worker routes evidence endpoint through token guard",async()=>{
