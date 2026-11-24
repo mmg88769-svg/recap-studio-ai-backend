@@ -32,7 +32,7 @@ test("returns structured grounded recap",async()=>{
     assert.equal(body.audio_analyzed_from,"client_supplied_transcript");
     assert.ok(providerUrl.includes("models/gemini-3.8-flash"));
     assert.equal(body.model,"gemini-3.8-flash");
-    assert.match(payload.contents[0].parts[0].text,/chronological Burmese movie recap/);
+    assert.match(payload.contents[0].parts[0].text,/Follow the supplied movie timeline in timestamp order/);
     assert.equal(payload.generationConfig.responseMimeType,"application/json");
     assert.deepEqual(payload.generationConfig.responseSchema.required,["narration_my","events","uncertainties"]);
     assert.equal(payload.generationConfig.responseSchema.properties.events.items.properties.start_ms.type,"INTEGER");
