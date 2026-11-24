@@ -324,3 +324,60 @@ test("accepts valid JSON wrapped in a markdown JSON fence",async()=>{
   try{const r=await worker.fetch(post(valid),env);assert.equal(r.status,200);assert.equal((await r.json()).narration_my,"ဇာတ်လမ်း")}
   finally{globalThis.fetch=previous}
 });
+
+
+test("evidence fallback keeps real network diagnostics and continues to the next Lite model",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{
+    calls++;
+    if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+    if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+      narration_my:"မြန်မာဇာတ်လမ်း",events:[],uncertainties:[]
+    })}]}}]}),{status:200});
+  };
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,200);assert.equal(calls,5);
+    assert.equal(body.model,"gemini-3.1-flash-lite");
+    assert.equal(body.fallback_used,true);
+    assert.deepEqual(body.fallback_models_tried,["gemini-3.5-flash-lite","gemini-3.1-flash-lite"]);
+    assert.equal(body.fallback_network_errors[0].name,"NetworkError");
+    assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+  }finally{globalThis.fetch=previous}
+});
+
+test("evidence reports the actual final fallback network error instead of a generic unreachable message",async()=>{
+  const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{
+    calls++;
+    if(calls<=3)return new Response(JSON.stringify({error:{message:"primary overloaded"}}),{status:503});
+    if(calls===4)throw Object.assign(new Error("connect ECONNRESET"),{name:"NetworkError"});
+    throw Object.assign(new Error("The operation was aborted"),{name:"TimeoutError"});
+  };
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);assert.equal(calls,5);
+    assert.equal(body.provider_status,503);
+    assert.equal(body.model,"gemini-3.1-flash-lite");
+    assert.match(body.detail,/TimeoutError/);
+    assert.match(body.detail,/The operation was aborted/);
+    assert.equal(body.fallback_network_errors.length,2);
+    assert.equal(body.fallback_network_errors[0].message,"connect ECONNRESET");
+    assert.equal(body.fallback_network_errors[1].name,"TimeoutError");
+    assert.deepEqual(body.fallback_models_tried,["gemini-3.5-flash-lite","gemini-3.1-flash-lite"]);
+  }finally{globalThis.fetch=previous}
+});
+
+test("invalid recap error includes the exact validation failure for the Android client",async()=>{
+  const previous=globalThis.fetch;
+  globalThis.fetch=async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+    narration_my:"ဇာတ်လမ်း",events:[{start_ms:0,end_ms:1000,summary_my:"Scene",evidence:[]}],uncertainties:[]
+  })}]}}]}),{status:200});
+  try{
+    const r=await worker.fetch(post(valid),env);const body=await r.json();
+    assert.equal(r.status,502);
+    assert.match(body.error,/events\\[0\\]\\.evidence must contain/);
+    assert.equal(body.error, "AI returned invalid recap structure: events[0].evidence must contain 1-20 non-empty evidence strings");
+  }finally{globalThis.fetch=previous}
+});
