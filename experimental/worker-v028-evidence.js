@@ -36,7 +36,7 @@ const RECAP_RESPONSE_SCHEMA={
 };
 function validateRecapStructure(result,input){
   if(!result||typeof result!=="object"||Array.isArray(result))return "response must be a JSON object";
-  if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>2500)return "narration_my must be a non-empty string of at most 2500 characters";
+  if(typeof result.narration_my!=="string"||!result.narration_my.trim()||result.narration_my.length>1400)return "narration_my must be a non-empty string of at most 1400 characters";
   const maxEvidenceTime=Math.max(...input.transcript_segments.map(s=>s.end_ms),...(input.frames||[]).map(f=>f.time_ms));
   const storyMap=result.story_map;
   if(!storyMap||typeof storyMap!=="object"||Array.isArray(storyMap))return "story_map must be an object";
@@ -165,7 +165,7 @@ export default {
       "STEP 4 — STORY ARC: identify the opening situation, central conflict, turning points, climax, and resolution only where evidence supports them. Empty strings are allowed for unsupported arc fields; never force a complete ending when the evidence stops earlier.",
       "STEP 5 — VISUAL CROSS-CHECK: transcript is audio/dialogue evidence. Frames are sparse still-image evidence, not the whole movie. A still frame cannot prove motion or an unseen action. Do not claim full-video visual analysis.",
       "STEP 6 — BURMESE NARRATION: write fluent, natural Myanmar storytelling with clear transitions, correct character continuity, and chronological cause-and-effect. Preserve names when known. Avoid repetitive openings, generic filler, frame-by-frame captions, and unsupported details.",
-      "Keep narration suitable for a 45–60 second voiceover and at most 2500 Unicode characters so the existing Android voice/export pipeline remains compatible.",
+      "Keep narration suitable for a 45–60 second voiceover and at most 1400 Unicode characters so the existing Android voice/export pipeline remains compatible.",
       "Return 6–16 chronological key story events only when the evidence supports them; fewer events are better than invented events.",
       "Return JSON matching the required response schema exactly. Use integer milliseconds for all timestamps. Every event must include summary_my, cause_my, consequence_my, character_ids, and 1-20 concise evidence strings.",
       "Every character and turning point must include evidence. Every event character_ids entry must refer to an id in story_map.characters.",
