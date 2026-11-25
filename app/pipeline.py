@@ -160,7 +160,6 @@ def _translate_batch(
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
-            temperature=0.2,
         ),
     )
     if not response.text:
@@ -190,7 +189,7 @@ def _translate_cues(cues: list[dict], source_language: str, project_id: str) -> 
     if language.startswith("my"):
         return [{**cue, "text": cue["source_text"]} for cue in cues]
 
-    client = genai.Client(vertexai=True, project=project_id, location=settings.gemini_location)
+    client = genai.Client(enterprise=True, project=project_id, location=settings.gemini_location)
     translated: list[dict] = []
     total_batches = math.ceil(len(cues) / TRANSLATION_BATCH_SIZE)
 
@@ -312,7 +311,7 @@ def process_job(job_id: str) -> None:
             translation_client = None
             if not source_language.lower().startswith("my"):
                 translation_client = genai.Client(
-                    vertexai=True,
+                    enterprise=True,
                     project=settings.project_id,
                     location=settings.gemini_location,
                 )
