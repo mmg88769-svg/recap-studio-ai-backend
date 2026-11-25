@@ -215,6 +215,7 @@ def process_job(job_id: str) -> None:
     bucket = storage.Client(project=settings.project_id).bucket(settings.gcs_bucket)
     source_blob = bucket.blob(job["source_object"])
     audio_chunk_blobs: list[str] = []
+    succeeded = False
 
     _update_job(
         job_ref,
@@ -348,6 +349,7 @@ def process_job(job_id: str) -> None:
                 completed_at=firestore.SERVER_TIMESTAMP,
                 error=None,
             )
+            succeeded = True
     except Exception as exc:
         _update_job(
             job_ref,
@@ -363,7 +365,8 @@ def process_job(job_id: str) -> None:
                 bucket.blob(object_name).delete()
             except Exception:
                 pass
-        try:
-            source_blob.delete()
-        except Exception:
-            pass
+        if succeeded:
+            try:
+                source_blob.delete()
+            except Exception:
+                pass
