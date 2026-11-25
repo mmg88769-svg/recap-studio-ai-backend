@@ -72,6 +72,12 @@ def _make_audio_chunk(audio_path: str, chunk_path: str, start: float, duration: 
     ], timeout=1800)
 
 
+def _duration_seconds(value) -> float:
+    if value is None:
+        return 0.0
+    return float(getattr(value, "seconds", 0)) + float(getattr(value, "nanos", 0)) / 1_000_000_000.0
+
+
 def _transcribe_chunk(
     speech_client: speech_v2.SpeechClient,
     audio_uri: str,
@@ -108,8 +114,8 @@ def _transcribe_chunk(
             languages.append(speech_result.language_code)
         alternative = speech_result.alternatives[0]
         for word in alternative.words:
-            start = word.start_offset.total_seconds() if word.start_offset else 0.0
-            end = word.end_offset.total_seconds() if word.end_offset else start
+            start = _duration_seconds(word.start_offset)
+            end = _duration_seconds(word.end_offset) if word.end_offset else start
             if end <= start:
                 continue
             words.append({
@@ -303,6 +309,13 @@ def process_job(job_id: str) -> None:
 
             translated_cues: list[dict] = []
             total_batches = math.ceil(len(source_cues) / TRANSLATION_BATCH_SIZE)
+            translation_client = None
+            if not source_language.lower().startswith("my"):
+                translation_client = genai.Client(
+                    vertexai=True,
+                    project=settings.project_id,
+                    location=settings.gemini_location,
+                )
             for batch_index in range(total_batches):
                 start = batch_index * TRANSLATION_BATCH_SIZE
                 batch = source_cues[start:start + TRANSLATION_BATCH_SIZE]
@@ -310,12 +323,7 @@ def process_job(job_id: str) -> None:
                 if source_language.lower().startswith("my"):
                     translated_cues.extend({**cue, "text": cue["source_text"]} for cue in batch)
                 else:
-                    client = genai.Client(
-                        vertexai=True,
-                        project=settings.project_id,
-                        location=settings.gemini_location,
-                    )
-                    translations = _translate_batch(client, source_language, batch, context_lines)
+                    translations = _translate_batch(translation_client, source_language, batch, context_lines)
                     translated_cues.extend(
                         {**cue, "text": translations[int(cue["id"])]}
                         for cue in batch
@@ -354,7 +362,6 @@ def process_job(job_id: str) -> None:
         _update_job(
             job_ref,
             status="failed",
-            progress=0,
             stage="လုပ်ဆောင်မှု မအောင်မြင်ပါ။",
             error=str(exc)[:400],
         )
