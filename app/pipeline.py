@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import subprocess
 import tempfile
 from collections import Counter
@@ -12,8 +11,7 @@ import google.auth
 from google.api_core.client_options import ClientOptions
 from google.cloud import firestore, speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
-from google import genai
-from google.genai import types
+from app.gemini_proxy import generate_content_text
 
 from app.config import settings
 from app.subtitles import build_srt, group_words
@@ -129,7 +127,6 @@ def _transcribe_chunk(
 
 
 def _translate_batch(
-    client: genai.Client,
     source_language: str,
     batch: list[dict],
     context_lines: list[str],
@@ -155,20 +152,21 @@ def _translate_batch(
         + "\nItems: "
         + json.dumps(items, ensure_ascii=False)
     )
-    response = client.models.generate_content(
-        model=settings.gemini_model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(
-                thinking_level=settings.gemini_thinking_level,
-            ),
-        ),
-    )
-    if not response.text:
-        raise RuntimeError("Translation model returned an empty response.")
-    data = json.loads(response.text)
-    translations = data.get("translations")
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+        },
+    }
+    response_text = generate_content_text(payload)
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Translation model returned invalid JSON.") from exc
+
+    translations = data.get("translations") if isinstance(data, dict) else None
     if not isinstance(translations, list):
         raise RuntimeError("Translation response has an invalid structure.")
 
@@ -185,29 +183,6 @@ def _translate_batch(
     if set(result) != expected:
         raise RuntimeError("Translation response omitted or duplicated subtitle items.")
     return result
-
-
-def _translate_cues(cues: list[dict], source_language: str, project_id: str) -> list[dict]:
-    language = (source_language or "").lower()
-    if language.startswith("my"):
-        return [{**cue, "text": cue["source_text"]} for cue in cues]
-
-    client = genai.Client(enterprise=True, project=project_id, location=settings.gemini_location)
-    translated: list[dict] = []
-    total_batches = math.ceil(len(cues) / TRANSLATION_BATCH_SIZE)
-
-    for batch_index in range(total_batches):
-        start = batch_index * TRANSLATION_BATCH_SIZE
-        batch = cues[start:start + TRANSLATION_BATCH_SIZE]
-        context_lines = [
-            cue["source_text"]
-            for cue in cues[max(0, start - 2):start]
-        ]
-        translations = _translate_batch(client, source_language, batch, context_lines)
-        translated.extend({**cue, "text": translations[int(cue["id"])]} for cue in batch)
-
-    return translated
-
 
 def process_job(job_id: str) -> None:
     if not settings.project_id or not settings.gcs_bucket:
@@ -311,13 +286,6 @@ def process_job(job_id: str) -> None:
 
             translated_cues: list[dict] = []
             total_batches = math.ceil(len(source_cues) / TRANSLATION_BATCH_SIZE)
-            translation_client = None
-            if not source_language.lower().startswith("my"):
-                translation_client = genai.Client(
-                    enterprise=True,
-                    project=settings.project_id,
-                    location=settings.gemini_location,
-                )
             for batch_index in range(total_batches):
                 start = batch_index * TRANSLATION_BATCH_SIZE
                 batch = source_cues[start:start + TRANSLATION_BATCH_SIZE]
@@ -325,7 +293,7 @@ def process_job(job_id: str) -> None:
                 if source_language.lower().startswith("my"):
                     translated_cues.extend({**cue, "text": cue["source_text"]} for cue in batch)
                 else:
-                    translations = _translate_batch(translation_client, source_language, batch, context_lines)
+                    translations = _translate_batch(source_language, batch, context_lines)
                     translated_cues.extend(
                         {**cue, "text": translations[int(cue["id"])]}
                         for cue in batch
