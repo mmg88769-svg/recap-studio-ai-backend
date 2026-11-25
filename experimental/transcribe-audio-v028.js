@@ -83,7 +83,8 @@ export default {
   // Keep actual upstream/network diagnostics; do not disguise a timeout as a generic 503.
   const fallback_models_tried=[];
   const fallback_network_errors=[];
-  for(const fallbackModel of FALLBACK_MODELS){
+  const fallbackModels=getGoogleAiProviderMode(env)==="agent-platform-express"?["gemini-2.5-flash-lite"]:FALLBACK_MODELS;
+  for(const fallbackModel of fallbackModels){
    if(response.status!==429&&!RETRYABLE_PROVIDER_STATUSES.has(response.status))break;
    try{await response.body?.cancel();}catch{}
    fallback_models_tried.push(fallbackModel);
