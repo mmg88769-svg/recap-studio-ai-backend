@@ -1,3 +1,4 @@
+import {getGoogleAiRequest, getGoogleAiProviderInfo, isGoogleAiConfigured} from "../google-ai-provider.js";
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
@@ -151,7 +152,7 @@ export default {
     const path=new URL(request.url).pathname;
     if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",capabilities:["audio-transcription","transcript-plus-sampled-frames"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
     if(request.method!=="POST"||path!=="/api/analyze-evidence")return reply({error:"Not found"},404);
-    if(!env.APP_TOKEN||!env.GEMINI_API_KEY)return reply({error:"Server not configured"},503);
+    if(!isGoogleAiConfigured(env))return reply({error:"Server not configured",provider:getGoogleAiProviderInfo(env)},503);
     if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return reply({error:"Unauthorized"},401);
     const length=Number(request.headers.get("content-length")||0);
     if(length>MAX_BODY)return reply({error:"Request too large"},413);
@@ -196,8 +197,10 @@ export default {
     let response, attempts = 0, activeModel = MODEL, fallback_used = false;
     let primary_network_error = null;
     try{
-      const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
-        method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+      const providerRequest=getGoogleAiRequest(env,MODEL);
+      if(providerRequest.error)return reply({error:providerRequest.error},503);
+      const result=await fetchWithTransientRetry(providerRequest.url,{
+        method:"POST",headers:providerRequest.headers,
         body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",responseSchema:RECAP_RESPONSE_SCHEMA,maxOutputTokens:8192}})
       });
       response=result.response;
@@ -216,9 +219,11 @@ export default {
       try{await response.body?.cancel();}catch{}
       fallback_models_tried.push(fallbackModel);
       try{
-        const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
+        const fallbackRequest=getGoogleAiRequest(env,fallbackModel);
+        if(fallbackRequest.error)throw new Error(fallbackRequest.error);
+        const secondary=await fetch(fallbackRequest.url,{
           method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
-          headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+          headers:fallbackRequest.headers,
           body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{responseMimeType:"application/json",responseSchema:RECAP_RESPONSE_SCHEMA,maxOutputTokens:8192}})
         });
         response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;
