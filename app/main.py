@@ -46,7 +46,7 @@ def get_storage() -> storage.Client:
 
 
 def safe_filename(value: str) -> str:
-    name = Path(value.replace("\\\\", "/")).name
+    name = Path(value.replace("\\", "/")).name
     name = re.sub(r"[^A-Za-z0-9._() -]", "_", name).strip(" .")
     return (name or "video.mp4")[:180]
 
