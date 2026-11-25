@@ -506,5 +506,7 @@ test("Agent Platform mode fails closed when its project or API key is missing",a
   });
   const response=await appWorker.fetch(request,{...agentPlatformEnv,AGENT_PLATFORM_API_KEY:""});
   assert.equal(response.status,503);
-  assert.match((await response.json()).error,/AGENT_PLATFORM_API_KEY/);
+  const body=await response.json();
+  assert.equal(body.provider.provider,"gemini-enterprise-agent-platform");
+  assert.equal(body.provider.configured,false);
 });
