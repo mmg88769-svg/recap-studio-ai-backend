@@ -150,7 +150,7 @@ function validate(input){
 export default {
   async fetch(request,env){
     const path=new URL(request.url).pathname;
-    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",capabilities:["audio-transcription","transcript-plus-sampled-frames"],ai_configured:Boolean(env.APP_TOKEN&&env.GEMINI_API_KEY)});
+    if(request.method==="GET"&&path==="/health")return reply({status:"online",version:"0.28-prototype",mode:"integrated-prototype",capabilities:["audio-transcription","transcript-plus-sampled-frames"],ai_configured:isGoogleAiConfigured(env),ai_provider:getGoogleAiProviderInfo(env).provider,ai_provider_location:getGoogleAiProviderInfo(env).location});
     if(request.method!=="POST"||path!=="/api/analyze-evidence")return reply({error:"Not found"},404);
     if(!isGoogleAiConfigured(env))return reply({error:"Server not configured",provider:getGoogleAiProviderInfo(env)},503);
     if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return reply({error:"Unauthorized"},401);
