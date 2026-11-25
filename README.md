@@ -10,7 +10,7 @@ Cloud Run API and worker for generating Burmese SRT subtitles from uploaded vide
 - A Cloud Run Job performs video/audio processing asynchronously.
 - FFmpeg extracts mono 16 kHz audio.
 - Cloud Speech-to-Text V2 Chirp 3 performs automatic-language transcription with word timestamps.
-- Gemini 4 Argon on the Agent Platform global endpoint translates dialogue into Burmese.
+- Gemini Developer API translates dialogue into Burmese through a Google Apps Script web-app proxy. The API key stays in Apps Script Script Properties; Cloud Run sends a separate shared proxy token.
 - The worker validates timestamps and SRT structure before marking a job complete.
 
 ## Android API contract
@@ -30,7 +30,7 @@ All application API calls require Authorization: Bearer APP_TOKEN. The signed St
 - Speech recognition: Chirp 3, model ID chirp_3, Speech-to-Text V2 multi-region us.
 - Source language: auto.
 - Target language: Burmese (my).
-- Translation: gemini-4-argon, Agent Platform global endpoint.
+- Translation: gemini-3.5-flash-lite by default, configurable with GEMINI_MODEL.
 
 The model choices are configurable through environment variables. Actual accuracy must be measured on representative Burmese, English, Chinese, Korean, Japanese, and Thai movie clips; no model can guarantee perfect transcription or translation.
 
@@ -41,4 +41,4 @@ The model choices are configurable through environment variables. Actual accurac
 
 ## Google Cloud deployment
 
-See docs/google-cloud-setup.md. Do not put API keys, service-account JSON files, or APP_TOKEN in this repository or in the APK.
+See docs/google-cloud-setup.md and docs/apps-script-proxy-setup.md. Do not put API keys, proxy tokens, service-account JSON files, or APP_TOKEN in this repository or in the APK.
