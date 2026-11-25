@@ -141,12 +141,12 @@ def _translate_batch(
         "Use natural spoken Burmese, not stiff word-for-word translation. Preserve profanity "
         "and emotional tone appropriately. The source language code is: "
         + (source_language or "auto-detected")
-        + ". Use nearby context only to understand references; do not add context to the translation.\\n"
+        + ". Use nearby context only to understand references; do not add context to the translation.\n"
         + "Previous context (not to translate): "
         + json.dumps(context_lines, ensure_ascii=False)
-        + "\\nTranslate these items and return JSON only in this exact shape: "
+        + "\nTranslate these items and return JSON only in this exact shape: "
         + '{"translations":[{"id":1,"text":"မြန်မာဘာသာပြန်"}]}'
-        + "\\nItems: "
+        + "\nItems: "
         + json.dumps(items, ensure_ascii=False)
     )
     response = client.models.generate_content(
