@@ -13,7 +13,7 @@ def join_words(words: list[dict], language_code: str) -> str:
     language = (language_code or "").split("-")[0].lower()
     parts = [str(item.get("text", "")).strip() for item in words]
     parts = [part for part in parts if part]
-    if language in {"zh", "ja", "th", "lo", "km"}:
+    if language in {"my", "zh", "ja", "th", "lo", "km"}:
         return "".join(parts).strip()
     return " ".join(parts).strip()
 
@@ -110,33 +110,41 @@ def build_srt(cues: list[dict]) -> str:
     ordered = sorted(cues, key=lambda item: int(item["start_ms"]))
     normalized: list[dict] = []
 
-    for index, cue in enumerate(ordered):
+    for cue in ordered:
         start_ms = max(0, int(cue["start_ms"]))
-        end_ms = max(start_ms + 700, int(cue["end_ms"]))
-        if index + 1 < len(ordered):
-            next_start = max(0, int(ordered[index + 1]["start_ms"]))
-            if end_ms > next_start:
-                end_ms = max(start_ms + 250, next_start - 40)
-        text = str(cue["text"]).strip()
-        lines = wrap_subtitle_text(text)
+        end_ms = max(start_ms + 300, int(cue["end_ms"]))
+        lines = wrap_subtitle_text(str(cue["text"]).strip())
         normalized.append({
             "start_ms": start_ms,
             "end_ms": end_ms,
             "lines": lines,
         })
 
+    # Keep cue order and remove overlaps by moving a later cue only by the
+    # minimum amount needed. This avoids emitting invalid or overlapping SRT.
+    for index in range(1, len(normalized)):
+        previous = normalized[index - 1]
+        current = normalized[index]
+        minimum_start = previous["end_ms"] + 40
+        if current["start_ms"] < minimum_start:
+            shift = minimum_start - current["start_ms"]
+            current["start_ms"] += shift
+            current["end_ms"] = max(
+                current["end_ms"] + shift,
+                current["start_ms"] + 300,
+            )
+
     blocks: list[str] = []
     for index, cue in enumerate(normalized, start=1):
         blocks.append(
-            f"{index}\n"
-            f"{format_timestamp(cue['start_ms'])} --> {format_timestamp(cue['end_ms'])}\n"
-            + "\n".join(cue["lines"])
+            f"{index}\\n"
+            f"{format_timestamp(cue['start_ms'])} --> {format_timestamp(cue['end_ms'])}\\n"
+            + "\\n".join(cue["lines"])
         )
-    result = "\n\n".join(blocks) + "\n"
+    result = "\\n\\n".join(blocks) + "\\n"
     if not validate_srt(result):
         raise ValueError("Generated SRT failed structural validation.")
     return result
-
 
 def validate_srt(content: str) -> bool:
     normalized = (content or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").strip()
