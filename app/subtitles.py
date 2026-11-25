@@ -137,11 +137,11 @@ def build_srt(cues: list[dict]) -> str:
     blocks: list[str] = []
     for index, cue in enumerate(normalized, start=1):
         blocks.append(
-            f"{index}\\n"
-            f"{format_timestamp(cue['start_ms'])} --> {format_timestamp(cue['end_ms'])}\\n"
-            + "\\n".join(cue["lines"])
+            f"{index}\n"
+            f"{format_timestamp(cue['start_ms'])} --> {format_timestamp(cue['end_ms'])}\n"
+            + "\n".join(cue["lines"])
         )
-    result = "\\n\\n".join(blocks) + "\\n"
+    result = "\n\n".join(blocks) + "\n"
     if not validate_srt(result):
         raise ValueError("Generated SRT failed structural validation.")
     return result
