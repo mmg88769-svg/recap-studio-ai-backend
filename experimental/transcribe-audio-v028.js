@@ -1,3 +1,4 @@
+import {getGoogleAiRequest, getGoogleAiProviderInfo, isGoogleAiConfigured} from "../google-ai-provider.js";
 // Isolated W.H.K audio transcription prototype. Not deployed or wired into Android.
 // Short audio clips only. No persistent storage. Never put API keys in the app.
 const MAX_BASE64=2_800_000;
@@ -47,7 +48,7 @@ async function fetchWithTransientRetry(url, options) {
 export default {
  async fetch(request,env){
   if(new URL(request.url).pathname!=="/api/transcribe-audio"||request.method!=="POST")return json({error:"Not found"},404);
-  if(!env.APP_TOKEN||!env.GEMINI_API_KEY)return json({error:"Server not configured"},503);
+  if(!isGoogleAiConfigured(env))return json({error:"Server not configured",provider:getGoogleAiProviderInfo(env)},503);
   if(request.headers.get("authorization")!==`Bearer ${env.APP_TOKEN}`)return json({error:"Unauthorized"},401);
   const length=Number(request.headers.get("content-length")||0);
   if(length>3_000_000)return json({error:"Audio request too large"},413);
@@ -60,13 +61,16 @@ export default {
     name:String(error?.name||"Error").slice(0,60),
     message:String(error?.message||"Network request failed")
       .replaceAll("https://generativelanguage.googleapis.com","[upstream]")
+       .replaceAll("https://aiplatform.googleapis.com","[upstream]")
       .slice(0,180)
   });
   let response, attempts = 0, activeModel = MODEL, fallback_used = false;
   let primary_network_error=null;
   try{
-   const result=await fetchWithTransientRetry(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
-    method:"POST",headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+   const providerRequest=getGoogleAiRequest(env,MODEL);
+   if(providerRequest.error)return json({error:providerRequest.error},503);
+   const result=await fetchWithTransientRetry(providerRequest.url,{
+    method:"POST",headers:providerRequest.headers,
     body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
    });
    response=result.response;
@@ -84,9 +88,11 @@ export default {
    try{await response.body?.cancel();}catch{}
    fallback_models_tried.push(fallbackModel);
    try{
-    const secondary=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent`,{
+    const fallbackRequest=getGoogleAiRequest(env,fallbackModel);
+     if(fallbackRequest.error)throw new Error(fallbackRequest.error);
+     const secondary=await fetch(fallbackRequest.url,{
      method:"POST",signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS),
-     headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+     headers:fallbackRequest.headers,
      body:JSON.stringify({contents:[{role:"user",parts:[{text:instruction},{inline_data:{mime_type:input.mime_type,data:input.audio_base64}}]}],generationConfig:{responseMimeType:"application/json",maxOutputTokens:8192}})
     });
     response=secondary;attempts++;activeModel=fallbackModel;fallback_used=true;
