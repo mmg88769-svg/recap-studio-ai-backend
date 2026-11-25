@@ -14,7 +14,7 @@ This project calls Gemini from the Cloud Run worker through a Google Apps Script
 | `GEMINI_API_KEY` | Your Google AI Studio API key |
 | `GEMINI_PROXY_TOKEN` | A new random secret generated locally, for example with `openssl rand -hex 32` |
 
-Do not put either value in Code.gs, GitHub, the Android app, or this chat.
+Do not put either value in Code.gs, GitHub, the Android app, or this chat. Restrict the API key to the Generative Language API, but do not apply an HTTP-referrer restriction because the request is sent server-to-server by Apps Script. Limit Apps Script project editor access to trusted people.
 
 ## 2. Deploy as a web app
 
