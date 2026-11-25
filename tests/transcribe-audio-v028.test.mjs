@@ -130,5 +130,7 @@ test("Agent Platform transcription mode fails closed without its credentials",as
  const agentEnv={...env,GEMINI_PROVIDER:"agent-platform",GOOGLE_CLOUD_PROJECT_ID:"whk-movie-recap-test",AGENT_PLATFORM_API_KEY:""};
  const response=await worker.fetch(req(),agentEnv);
  assert.equal(response.status,503);
- assert.match((await response.json()).error,/AGENT_PLATFORM_API_KEY/);
+ const body=await response.json();
+ assert.equal(body.provider.provider,"gemini-enterprise-agent-platform");
+ assert.equal(body.provider.configured,false);
 });
