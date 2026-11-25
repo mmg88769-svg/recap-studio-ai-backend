@@ -160,6 +160,9 @@ def _translate_batch(
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(
+                thinking_level=settings.gemini_thinking_level,
+            ),
         ),
     )
     if not response.text:
