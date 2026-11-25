@@ -36,7 +36,7 @@ Set shell variables:
     export REGION="us-central1"
     export BUCKET="${PROJECT_ID}-myanmar-srt"
     export SERVICE_ACCOUNT="myanmar-srt-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
-    export IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/myanmar-srt/backend:1.0.0"
+    export IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/myanmar-srt/backend:1.0.1"
 
 ## 2. Create Firestore and Storage
 
