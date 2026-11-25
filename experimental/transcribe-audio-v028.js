@@ -1,4 +1,4 @@
-import {getGoogleAiRequest, getGoogleAiProviderInfo, isGoogleAiConfigured} from "../google-ai-provider.js";
+import {getGoogleAiRequest, getGoogleAiProviderInfo, getGoogleAiProviderMode, isGoogleAiConfigured} from "../google-ai-provider.js";
 // Isolated W.H.K audio transcription prototype. Not deployed or wired into Android.
 // Short audio clips only. No persistent storage. Never put API keys in the app.
 const MAX_BASE64=2_800_000;
