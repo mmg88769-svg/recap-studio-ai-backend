@@ -1,4 +1,4 @@
-import {getGoogleAiRequest, getGoogleAiProviderInfo, isGoogleAiConfigured} from "../google-ai-provider.js";
+import {getGoogleAiRequest, getGoogleAiProviderInfo, getGoogleAiProviderMode, isGoogleAiConfigured} from "../google-ai-provider.js";
 // W.H.K v0.28 isolated prototype. NOT deployed. Does not replace worker.js.
 // Accepts timestamped transcript and optional sampled JPEG frames; no claim of full-video listening.
 const MAX_BODY=3500000, MAX_TRANSCRIPT=100000, MAX_FRAMES=8, MODEL="gemini-3.8-flash";
