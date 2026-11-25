@@ -105,7 +105,8 @@ async function gemini(env, model, payload) {
       if (response) {
         try { await response.body?.cancel(); } catch {}
       }
-      const result = candidate === model
+      const isPrimaryModel = expressMode ? candidate === models[0] : candidate === model;
+      const result = isPrimaryModel
         ? await fetchWithTransientRetry(route.url,providerRequest)
         : {
             response: await fetch(route.url,
@@ -114,9 +115,9 @@ async function gemini(env, model, payload) {
           };
       response = result.response;
       attempts += result.attempts;
-      if(candidate!==model)fallbackModelsTried.push(candidate);
+      if(!isPrimaryModel)fallbackModelsTried.push(candidate);
     } catch {
-      attempts += candidate === model ? 3 : 1;
+      attempts += isPrimaryModel ? 3 : 1;
       // Network failures should be reported, not masked by a fake successful response.
       if (candidate === models.at(-1)) {
         return {error:"AI provider temporarily unreachable",status:503,
