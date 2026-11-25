@@ -195,4 +195,11 @@ Then test the app with a short, non-sensitive video clip first. Check upload, jo
 - The API does not store provider API keys in the APK.
 
 
-If the Cloud Run Job already exists, use `gcloud run jobs update myanmar-srt-worker` with the same image, environment variables, and `--set-secrets="GEMINI_PROXY_TOKEN=GEMINI_PROXY_TOKEN:latest"` settings instead of running the create command again.
+If the Cloud Run Job already exists, update it instead of running the create command again:
+
+    gcloud run jobs update myanmar-srt-worker \
+      --image="${IMAGE}" \
+      --region="${REGION}" \
+      --service-account="${SERVICE_ACCOUNT}" \
+      --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET},STT_LOCATION=us,STT_MODEL=chirp_3,GEMINI_PROXY_URL=${GEMINI_PROXY_URL},GEMINI_MODEL=gemini-3.5-flash-lite,GEMINI_TIMEOUT_SECONDS=120,GEMINI_MAX_RETRIES=3,MAX_VIDEO_BYTES=2147483648,MAX_VIDEO_DURATION_SECONDS=14400" \
+      --set-secrets="GEMINI_PROXY_TOKEN=GEMINI_PROXY_TOKEN:latest"
