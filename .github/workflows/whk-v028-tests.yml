@@ -1,7 +1,7 @@
 name: WHK v0.28 Prototype Tests
 on:
   push:
-    branches: [dev/whk-recap-video-audio-v028, feat/whk-grounded-narration-v029]
+    branches: [dev/whk-recap-video-audio-v028, feat/whk-grounded-narration-v029, feat/whk-agent-platform-global-v030]
   pull_request:
     branches: [main, dev/whk-recap-video-audio-v028]
   workflow_dispatch:
