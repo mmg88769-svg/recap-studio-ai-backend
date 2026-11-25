@@ -11,9 +11,9 @@ import google.auth
 from google.api_core.client_options import ClientOptions
 from google.cloud import firestore, speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
-from app.gemini_proxy import generate_content_text
 
 from app.config import settings
+from app.gemini_proxy import generate_content_text
 from app.subtitles import build_srt, group_words
 
 
@@ -183,6 +183,7 @@ def _translate_batch(
     if set(result) != expected:
         raise RuntimeError("Translation response omitted or duplicated subtitle items.")
     return result
+
 
 def process_job(job_id: str) -> None:
     if not settings.project_id or not settings.gcs_bucket:
