@@ -211,4 +211,4 @@ def test_status_and_download_require_completed_job(api):
     )
     assert downloaded.status_code == 200
     assert downloaded.content.startswith(b"1\n00:00:01,000")
-    assert "subtitle.srt" in downloaded.headers["content-disposition"]
+    assert "movie.srt" in downloaded.headers["content-disposition"]
