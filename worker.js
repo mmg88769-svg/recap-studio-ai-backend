@@ -1,3 +1,4 @@
+import {getGoogleAiRequest, getGoogleAiProviderInfo, getGoogleAiProviderMode, isGoogleAiConfigured} from "./google-ai-provider.js";
 import evidenceWorker from "./experimental/worker-v028-evidence.js";
 import transcriptionWorker from "./experimental/transcribe-audio-v028.js";
 
@@ -82,14 +83,6 @@ async function fetchWithTransientRetry(url, options) {
 }
 
 async function gemini(env, model, payload) {
-  const providerRequest = {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": env.GEMINI_API_KEY
-    },
-    body: JSON.stringify(payload)
-  };
   const models = model === textModel ? [model, ...fallbackTextModels] : [model];
   let response, activeModel = model, fallbackUsed = false, attempts = 0;
   const fallbackModelsTried=[];
@@ -98,20 +91,22 @@ async function gemini(env, model, payload) {
     if (response && response.status !== 429 && !RETRYABLE_PROVIDER_STATUSES.has(response.status)) break;
     activeModel = candidate;
     fallbackUsed = candidate !== model;
+    const route = getGoogleAiRequest(env,candidate);
+    if(route.error)return {error:route.error,status:503,model:activeModel,fallback_used:fallbackUsed,attempts};
+    const providerRequest = {
+      method: "POST",
+      headers: route.headers,
+      body: JSON.stringify(payload)
+    };
     try {
       if (response) {
         try { await response.body?.cancel(); } catch {}
       }
       const result = candidate === model
-        ? await fetchWithTransientRetry(
-            `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
-            providerRequest
-          )
+        ? await fetchWithTransientRetry(route.url,providerRequest)
         : {
-            response: await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
-              {...providerRequest,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)}
-            ),
+            response: await fetch(route.url,
+              {...providerRequest,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)}),
             attempts: 1
           };
       response = result.response;
@@ -165,7 +160,9 @@ export default {
         version: "0.28-prototype",
         mode: "integrated-prototype",
         capabilities: ["audio-transcription", "transcript-plus-sampled-frames"],
-        ai_configured: Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
+        ai_configured: isGoogleAiConfigured(env),
+        ai_provider: getGoogleAiProviderInfo(env).provider,
+        ai_provider_location: getGoogleAiProviderInfo(env).location
       });
     }
     if (url.pathname === "/api/analyze-evidence") {
@@ -193,7 +190,7 @@ export default {
       return json({error: "Not found"}, 404);
     }
 
-    if (!env.GEMINI_API_KEY || !env.APP_TOKEN) {
+    if (!isGoogleAiConfigured(env)) {
       return json({error: "Server not configured"}, 503);
     }
 
@@ -290,22 +287,38 @@ export default {
         `Use ${styles[style]}. Speak clearly with natural pauses. Do not translate, add words, or add sound effects.`;
 
       try {
-        const interactionUrl="https://generativelanguage.googleapis.com/v1beta/interactions";
-        const requestBody=model=>JSON.stringify({
-          model,
-          input:[{
-            type:"user_input",
-            content:[{
-              type:"text",text,
-              annotations:[{type:"speech_metadata",style:direction}]
-            }]
-          }],
-          response_format:{type:"audio"},
-          generation_config:{speech_config:[{voice}]}
-        });
-        const headers={"Content-Type":"application/json","x-goog-api-key":env.GEMINI_API_KEY};
-        const primary=await fetchWithTransientRetry(interactionUrl,{
-          method:"POST",headers,body:requestBody(voiceModel)
+        const useAgentPlatform=getGoogleAiProviderMode(env)==="agent-platform";
+        const buildTtsRequest=model=>{
+          if(useAgentPlatform){
+            const route=getGoogleAiRequest(env,model);
+            if(route.error)return route;
+            return {
+              url:route.url,
+              headers:route.headers,
+              body:JSON.stringify({
+                contents:[{role:"user",parts:[{text,speechMetadata:{style:direction}}]}],
+                generationConfig:{
+                  responseModalities:["AUDIO"],
+                  speechConfig:{voiceConfig:{voice}}
+                }
+              })
+            };
+          }
+          return {
+            url:"https://generativelanguage.googleapis.com/v1beta/interactions",
+            headers:{"Content-Type":"application/json","x-goog-api-key":env.GEMINI_API_KEY},
+            body:JSON.stringify({
+              model,
+              input:[{type:"user_input",content:[{type:"text",text,annotations:[{type:"speech_metadata",style:direction}]}]}],
+              response_format:{type:"audio"},
+              generation_config:{speech_config:[{voice}]}
+            })
+          };
+        };
+        const primaryRequest=buildTtsRequest(voiceModel);
+        if(primaryRequest.error)return json({error:primaryRequest.error},503);
+        const primary=await fetchWithTransientRetry(primaryRequest.url,{
+          method:"POST",headers:primaryRequest.headers,body:primaryRequest.body
         });
         let response=primary.response;
         let attempts=primary.attempts;
@@ -315,8 +328,10 @@ export default {
         // Free-tier Lite is a compatible secondary voice model, not a paid service.
         if(response.status===429 || RETRYABLE_PROVIDER_STATUSES.has(response.status)){
           try { await response.body?.cancel(); } catch {}
-          const secondary=await fetch(interactionUrl,{
-            method:"POST",headers,body:requestBody(fallbackVoiceModel),
+          const fallbackRequest=buildTtsRequest(fallbackVoiceModel);
+          if(fallbackRequest.error)return json({error:fallbackRequest.error},503);
+          const secondary=await fetch(fallbackRequest.url,{
+            method:"POST",headers:fallbackRequest.headers,body:fallbackRequest.body,
             signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)
           });
           response=secondary;
@@ -341,14 +356,23 @@ export default {
             model:activeModel,fallback_used:fallbackUsed,
             retryable:response.status>=500,attempts},502);
 
-        // REST Interactions responses expose generated audio in steps[].content[].
-        const stepAudio=(data?.steps||[])
-          .filter(step=>step?.type==="model_output")
-          .flatMap(step=>step.content||[])
-          .filter(part=>part?.type==="audio"&&typeof part.data==="string")
-          .at(-1);
-        const audioData=stepAudio?.data;
-        const audioMime=stepAudio?.mime_type||"audio/wav";
+        // Agent Platform generateContent returns audio in candidates[].content.parts[].inlineData.
+        // The legacy Developer API Interactions route returns audio in steps[].content[].
+        let audioData,audioMime="audio/wav";
+        if(useAgentPlatform){
+          const audioPart=(data?.candidates?.[0]?.content?.parts||[])
+            .find(part=>typeof (part?.inlineData?.data||part?.inline_data?.data)==="string");
+          audioData=audioPart?.inlineData?.data||audioPart?.inline_data?.data;
+          audioMime=audioPart?.inlineData?.mimeType||audioPart?.inline_data?.mime_type||"audio/wav";
+        }else{
+          const stepAudio=(data?.steps||[])
+            .filter(step=>step?.type==="model_output")
+            .flatMap(step=>step.content||[])
+            .filter(part=>part?.type==="audio"&&typeof part.data==="string")
+            .at(-1);
+          audioData=stepAudio?.data;
+          audioMime=stepAudio?.mime_type||"audio/wav";
+        }
         if (!audioData) return json({error:"No voice audio returned"},502);
 
         const binary=atob(audioData);
