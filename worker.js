@@ -191,7 +191,7 @@ export default {
     }
 
     if (!isGoogleAiConfigured(env)) {
-      return json({error: "Server not configured"}, 503);
+      return json({error: "Server not configured",provider:getGoogleAiProviderInfo(env)}, 503);
     }
 
     if (
