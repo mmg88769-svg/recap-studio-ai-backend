@@ -9,7 +9,7 @@ This backend is designed for the Google Cloud project used by Myanmar SRT. The A
 - Speech-to-Text V2 endpoint: us multi-region
 - Speech model: chirp_3, automatic source-language detection, word timestamps
 - Gemini translation endpoint: global
-- Gemini model: gemini-3.8-flash
+- Gemini model: gemini-4-argon
 - Maximum upload: 2 GiB by default
 - Maximum movie duration: 4 hours by default
 
@@ -135,7 +135,7 @@ Create the worker Job before deploying the API:
       --max-retries=1 \
       --tasks=1 \
       --parallelism=1 \
-      --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET},STT_LOCATION=us,STT_MODEL=chirp_3,GEMINI_LOCATION=global,GEMINI_MODEL=gemini-3.8-flash,MAX_VIDEO_BYTES=2147483648,MAX_VIDEO_DURATION_SECONDS=14400"
+      --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET},STT_LOCATION=us,STT_MODEL=chirp_3,GEMINI_LOCATION=global,GEMINI_MODEL=gemini-4-argon,GEMINI_THINKING_LEVEL=HIGH,MAX_VIDEO_BYTES=2147483648,MAX_VIDEO_DURATION_SECONDS=14400"
 
 The API starts this Job with a per-execution JOB_ID override. The container entrypoint detects JOB_ID and runs the worker instead of starting the HTTP server.
 
@@ -151,7 +151,7 @@ The API is public at the Cloud Run network layer so the Android app can reach it
       --memory=1Gi \
       --cpu=1 \
       --timeout=60 \
-      --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET},SIGNING_SERVICE_ACCOUNT_EMAIL=${SERVICE_ACCOUNT},RUN_REGION=${REGION},RUN_JOB_NAME=myanmar-srt-worker,STT_LOCATION=us,STT_MODEL=chirp_3,GEMINI_LOCATION=global,GEMINI_MODEL=gemini-3.8-flash,MAX_VIDEO_BYTES=2147483648,MAX_VIDEO_DURATION_SECONDS=14400" \
+      --set-env-vars="PROJECT_ID=${PROJECT_ID},GCS_BUCKET=${BUCKET},SIGNING_SERVICE_ACCOUNT_EMAIL=${SERVICE_ACCOUNT},RUN_REGION=${REGION},RUN_JOB_NAME=myanmar-srt-worker,STT_LOCATION=us,STT_MODEL=chirp_3,GEMINI_LOCATION=global,GEMINI_MODEL=gemini-4-argon,MAX_VIDEO_BYTES=2147483648,MAX_VIDEO_DURATION_SECONDS=14400" \
       --set-secrets="APP_TOKEN=APP_TOKEN:latest"
 
 Get the Server URL:
