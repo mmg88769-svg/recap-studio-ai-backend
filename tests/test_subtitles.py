@@ -16,9 +16,10 @@ def test_group_words_respects_sentence_and_time_boundaries():
 
 
 def test_wrap_burmese_subtitle_into_two_lines():
-    lines = wrap_subtitle_text("ဒီဇာတ်ကားထဲမှာ သူတို့ဟာ အရေးကြီးတဲ့ လျှို့ဝှက်ချက်တစ်ခုကို ရှာဖွေတွေ့ရှိခဲ့ကြပါတယ်။", 24)
+    lines = wrap_subtitle_text("ဒီဇာတ်ကားထဲမှာ သူတို့ဟာ အရေးကြီးတဲ့ လျှို့ဝှက်ချက်တစ်ခုကို ရှာဖွေတွေ့ရှိခဲ့ကြပါတယ်။", 42)
     assert 1 <= len(lines) <= 2
     assert all(line for line in lines)
+    assert all(len(line) > 0 for line in lines)
 
 
 def test_build_srt_has_valid_sequential_cues():
@@ -36,3 +37,15 @@ def test_validate_srt_rejects_overlapping_or_invalid_cues():
         "2\n00:00:03,000 --> 00:00:05,000\nဒုတိယစာကြောင်း\n"
     )
     assert not validate_srt(invalid)
+
+
+def test_build_srt_shifts_overlapping_cues_forward():
+    content = build_srt([
+        {"start_ms": 1000, "end_ms": 2600, "text": "ပထမစာကြောင်း"},
+        {"start_ms": 2500, "end_ms": 3900, "text": "ဒုတိယစာကြောင်း"},
+    ])
+    assert validate_srt(content)
+    blocks = content.strip().split("\n\n")
+    first_end = blocks[0].split("\n")[1].split(" --> ")[1]
+    second_start = blocks[1].split("\n")[1].split(" --> ")[0]
+    assert first_end < second_start
