@@ -1,3 +1,4 @@
+import {getGoogleAiRequest, getGoogleAiProviderInfo, getGoogleAiProviderMode, isGoogleAiConfigured} from "./google-ai-provider.js";
 import evidenceWorker from "./experimental/worker-v028-evidence.js";
 import transcriptionWorker from "./experimental/transcribe-audio-v028.js";
 
@@ -82,43 +83,41 @@ async function fetchWithTransientRetry(url, options) {
 }
 
 async function gemini(env, model, payload) {
-  const providerRequest = {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": env.GEMINI_API_KEY
-    },
-    body: JSON.stringify(payload)
-  };
-  const models = model === textModel ? [model, ...fallbackTextModels] : [model];
-  let response, activeModel = model, fallbackUsed = false, attempts = 0;
+  const expressMode = getGoogleAiProviderMode(env) === "agent-platform-express";
+  const models = expressMode
+    ? ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    : (model === textModel ? [model, ...fallbackTextModels] : [model]);
+  let response, activeModel = models[0], fallbackUsed = false, attempts = 0;
   const fallbackModelsTried=[];
 
   for (const candidate of models) {
     if (response && response.status !== 429 && !RETRYABLE_PROVIDER_STATUSES.has(response.status)) break;
     activeModel = candidate;
-    fallbackUsed = candidate !== model;
+    fallbackUsed = expressMode ? candidate !== models[0] : candidate !== model;
+    const route = getGoogleAiRequest(env,candidate);
+    if(route.error)return {error:route.error,status:503,model:activeModel,fallback_used:fallbackUsed,attempts};
+    const providerRequest = {
+      method: "POST",
+      headers: route.headers,
+      body: JSON.stringify(payload)
+    };
     try {
       if (response) {
         try { await response.body?.cancel(); } catch {}
       }
-      const result = candidate === model
-        ? await fetchWithTransientRetry(
-            `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
-            providerRequest
-          )
+      const isPrimaryModel = expressMode ? candidate === models[0] : candidate === model;
+      const result = isPrimaryModel
+        ? await fetchWithTransientRetry(route.url,providerRequest)
         : {
-            response: await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`,
-              {...providerRequest,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)}
-            ),
+            response: await fetch(route.url,
+              {...providerRequest,signal:AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)}),
             attempts: 1
           };
       response = result.response;
       attempts += result.attempts;
-      if(candidate!==model)fallbackModelsTried.push(candidate);
+      if(!isPrimaryModel)fallbackModelsTried.push(candidate);
     } catch {
-      attempts += candidate === model ? 3 : 1;
+      attempts += isPrimaryModel ? 3 : 1;
       // Network failures should be reported, not masked by a fake successful response.
       if (candidate === models.at(-1)) {
         return {error:"AI provider temporarily unreachable",status:503,
@@ -165,7 +164,9 @@ export default {
         version: "0.28-prototype",
         mode: "integrated-prototype",
         capabilities: ["audio-transcription", "transcript-plus-sampled-frames"],
-        ai_configured: Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
+        ai_configured: isGoogleAiConfigured(env),
+        ai_provider: getGoogleAiProviderInfo(env).provider,
+        ai_provider_location: getGoogleAiProviderInfo(env).location
       });
     }
     if (url.pathname === "/api/analyze-evidence") {
@@ -193,8 +194,11 @@ export default {
       return json({error: "Not found"}, 404);
     }
 
-    if (!env.GEMINI_API_KEY || !env.APP_TOKEN) {
-      return json({error: "Server not configured"}, 503);
+    const configured = tts
+      ? Boolean(env.APP_TOKEN && env.GEMINI_API_KEY)
+      : isGoogleAiConfigured(env);
+    if (!configured) {
+      return json({error: "Server not configured",provider:getGoogleAiProviderInfo(env)}, 503);
     }
 
     if (
