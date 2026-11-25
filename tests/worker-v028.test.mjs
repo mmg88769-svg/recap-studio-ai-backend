@@ -436,3 +436,75 @@ test("invalid recap error includes the exact validation failure for the Android 
     assert.equal(body.error, "AI returned invalid recap structure: events[0].evidence must contain 1-20 non-empty evidence strings");
   }finally{globalThis.fetch=previous}
 });
+
+const agentPlatformEnv={
+  ...env,
+  GEMINI_PROVIDER:"agent-platform",
+  GOOGLE_CLOUD_PROJECT_ID:"whk-movie-recap-test",
+  AGENT_PLATFORM_API_KEY:"test-agent-platform-key"
+};
+
+test("health reports Agent Platform provider when its credentials are configured",async()=>{
+  const response=await appWorker.fetch(new Request("https://example.test/health"),agentPlatformEnv);
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.ai_configured,true);
+  assert.equal(body.ai_provider,"gemini-enterprise-agent-platform");
+  assert.equal(body.ai_provider_location,"global");
+});
+
+test("legacy recap routes to Gemini Enterprise Agent Platform global endpoint",async()=>{
+  const previous=globalThis.fetch;let target,headers;
+  globalThis.fetch=async(url,options)=>{
+    target=url;headers=options.headers;
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:"မြန်မာဇာတ်လမ်း အကျဉ်းချုပ်"}]}}]}),{status:200});
+  };
+  try{
+    const response=await appWorker.fetch(
+      legacyReq("/api/recap",{transcript:"A sufficiently long movie dialogue transcript."}),
+      agentPlatformEnv
+    );
+    const body=await response.json();
+    assert.equal(response.status,200);
+    assert.match(body.script,/မြန်မာ/);
+    assert.equal(target,"https://aiplatform.googleapis.com/v1/projects/whk-movie-recap-test/locations/global/publishers/google/models/gemini-3.8-flash:generateContent");
+    assert.equal(headers["x-goog-api-key"],"test-agent-platform-key");
+    assert.equal(headers.Authorization,undefined);
+  }finally{globalThis.fetch=previous}
+});
+
+test("Agent Platform TTS uses generateContent and returns its inline WAV audio",async()=>{
+  const previous=globalThis.fetch;
+  const wav=Buffer.alloc(44);wav.write("RIFF",0);wav.write("WAVE",8);
+  let target,payload,headers;
+  globalThis.fetch=async(url,options)=>{
+    target=url;payload=JSON.parse(options.body);headers=options.headers;
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{
+      inlineData:{mimeType:"audio/wav",data:wav.toString("base64")}
+    }]}}]}),{status:200});
+  };
+  try{
+    const request=new Request("https://example.test/api/tts",{
+      method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+      body:JSON.stringify({text:"မြန်မာဇာတ်လမ်း",language:"my",gender:"male",style:"cinematic"})
+    });
+    const response=await appWorker.fetch(request,agentPlatformEnv);
+    assert.equal(response.status,200,await response.clone().text());
+    assert.equal(response.headers.get("content-type"),"audio/wav");
+    assert.equal(target,"https://aiplatform.googleapis.com/v1/projects/whk-movie-recap-test/locations/global/publishers/google/models/gemini-3.8-flash-tts:generateContent");
+    assert.equal(headers["x-goog-api-key"],"test-agent-platform-key");
+    assert.deepEqual(payload.generationConfig.responseModalities,["AUDIO"]);
+    assert.equal(payload.generationConfig.speechConfig.voiceConfig.voice,"Charon");
+    assert.ok(payload.contents[0].parts[0].speechMetadata.style.includes("Burmese"));
+  }finally{globalThis.fetch=previous}
+});
+
+test("Agent Platform mode fails closed when its project or API key is missing",async()=>{
+  const request=new Request("https://example.test/api/recap",{
+    method:"POST",headers:{"authorization":"Bearer test-token","content-type":"application/json"},
+    body:JSON.stringify({transcript:"A sufficiently long movie dialogue transcript."})
+  });
+  const response=await appWorker.fetch(request,{...agentPlatformEnv,AGENT_PLATFORM_API_KEY:""});
+  assert.equal(response.status,503);
+  assert.match((await response.json()).error,/AGENT_PLATFORM_API_KEY/);
+});
