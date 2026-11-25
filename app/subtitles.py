@@ -78,12 +78,13 @@ def wrap_subtitle_text(text: str, max_graphemes: int = 42) -> list[str]:
     if len(clusters) <= max_graphemes:
         return [clean]
 
+    minimum_split = max(1, len(clusters) - max_graphemes)
     split_candidates = [
         index for index, cluster in enumerate(clusters[:max_graphemes + 1])
-        if cluster.isspace() and index >= max(1, max_graphemes // 2)
+        if cluster.isspace() and minimum_split <= index <= max_graphemes
     ]
     if split_candidates:
-        split_at = split_candidates[-1]
+        split_at = min(split_candidates, key=lambda index: abs(index - max_graphemes))
     else:
         split_at = max_graphemes
 
