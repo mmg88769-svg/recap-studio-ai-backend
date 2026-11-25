@@ -111,7 +111,7 @@ def test_generate_content_rejects_provider_error(monkeypatch):
         ),
     )
 
-    with pytest.raises(RuntimeError, match="Gemini API error \(403\)"):
+    with pytest.raises(RuntimeError, match=r"Gemini API error \(403\)"):
         gemini_proxy.generate_content_text({"contents": []})
 
 
