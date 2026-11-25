@@ -134,3 +134,31 @@ test("Agent Platform transcription mode fails closed without its credentials",as
  assert.equal(body.provider.provider,"gemini-enterprise-agent-platform");
  assert.equal(body.provider.configured,false);
 });
+
+test("transcription uses the projectless Agent Platform Express endpoint and supported Flash model",async()=>{
+ const old=globalThis.fetch;let target,headers,payload;
+ globalThis.fetch=async(url,options)=>{
+  target=url;headers=options.headers;payload=JSON.parse(options.body);
+  return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify({
+   segments:[{start_ms:0,end_ms:1200,text:"Hello",language:"en"}],uncertainties:[]
+  })}]} }]}),{status:200});
+ };
+ const expressEnv={...env,GEMINI_PROVIDER:"agent-platform-express",AGENT_PLATFORM_API_KEY:"test-express-key"};
+ try{
+  const response=await worker.fetch(req(),expressEnv);const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.transcript_segments[0].text,"Hello");
+  assert.equal(target,"https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3-flash-preview:generateContent");
+  assert.equal(headers["x-goog-api-key"],"test-express-key");
+  assert.equal(payload.contents[0].parts[1].inline_data.data,"YWJj");
+ }finally{globalThis.fetch=old}
+});
+
+test("Agent Platform Express transcription fails closed without its API key",async()=>{
+ const expressEnv={...env,GEMINI_PROVIDER:"agent-platform-express",AGENT_PLATFORM_API_KEY:""};
+ const response=await worker.fetch(req(),expressEnv);
+ assert.equal(response.status,503);
+ const body=await response.json();
+ assert.equal(body.provider.provider,"gemini-enterprise-agent-platform-express");
+ assert.equal(body.provider.configured,false);
+});
